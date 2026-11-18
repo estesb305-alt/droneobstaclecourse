@@ -1,0 +1,2755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drone Obstacle Course</title>
+
+<style>
+  /* The page is just a full-size container for the 3D canvas. */
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #9fd3f5;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  #game { position: relative; width: 100%; height: 100%; }
+  #game canvas { display: block; width: 100%; height: 100%; }
+
+  /* Small controls reminder in the corner. */
+  #help {
+    position: absolute; left: 12px; bottom: 12px;
+    padding: 8px 12px;
+    background: rgba(15, 25, 35, 0.55);
+    color: #fff; font-size: 12px; line-height: 1.6;
+    border-radius: 6px; pointer-events: none;
+  }
+  #help b { font-weight: 600; }
+
+  /* Short on-screen message (for example when you reach the edge of the world). */
+  #notice {
+    position: absolute; top: 112px; left: 50%; transform: translateX(-50%);
+    padding: 8px 14px; max-width: 70%; text-align: center;
+    background: rgba(15, 25, 35, 0.85); color: #fff; font-size: 14px;
+    border-radius: 6px; pointer-events: none;
+    opacity: 0; transition: opacity 0.25s;
+  }
+  #notice.show { opacity: 1; }
+
+  /* ================= Race interface ================= */
+  .hidden { display: none !important; }
+  button { font: inherit; }
+
+  /* heads-up display while racing */
+  #hud { position: absolute; inset: 0; pointer-events: none; color: #fff; font-variant-numeric: tabular-nums; }
+  #hudInfo {
+    position: absolute; top: 12px; left: 12px; padding: 8px 12px; max-width: 34%;
+    background: rgba(14, 22, 32, 0.62); border-radius: 8px; font-size: 13px; line-height: 1.55;
+  }
+  #hudCourse { font-weight: 700; font-size: 14px; }
+  #hudTimer { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); text-align: center; text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6); }
+  #hudTime { font-size: 46px; font-weight: 800; line-height: 1; letter-spacing: 0.5px; }
+  #hudGate { font-size: 15px; font-weight: 600; margin-top: 6px; }
+  #hudHits, #hudBonus { width: fit-content; margin: 5px auto 0; padding: 2px 10px; border-radius: 6px; font-size: 13px; background: rgba(14, 22, 32, 0.62); text-shadow: none; }
+  #hudHits { color: #ff9d8f; }
+  #hudBonus { color: #8df0a8; }
+  #hudHits:empty, #hudBonus:empty { display: none; }
+
+  #game canvas#minimap {          /* "#game canvas" above makes every canvas full size, so this must be more specific */
+    position: absolute; top: 12px; right: 12px; width: 170px; height: 170px; border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.85); background: #1f2a33;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45); pointer-events: none;
+  }
+
+  /* arrow that points to the next gate */
+  #pointer { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+  #pointerArrow { position: absolute; left: -16px; top: -16px; width: 32px; height: 32px; filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.7)); }
+  #pointerLabel { position: absolute; left: -35px; top: 18px; width: 70px; text-align: center; font-size: 12px; font-weight: 700; color: #fff; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9); }
+
+  #banner {
+    position: absolute; left: 50%; top: 24%; transform: translate(-50%, -50%); text-align: center;
+    font-size: 34px; font-weight: 800; color: #fff; text-shadow: 0 3px 12px rgba(0, 0, 0, 0.65);
+    opacity: 0; transition: opacity 0.2s; pointer-events: none;
+  }
+  #banner.show { opacity: 1; }
+  #banner.bad { color: #ff7a6b; }
+  #banner.good { color: #8df0a8; }
+  #banner.gold { color: #ffd23f; }
+  #countdown {
+    position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%);
+    font-size: 130px; font-weight: 800; color: #fff; text-shadow: 0 4px 20px rgba(0, 0, 0, 0.65); pointer-events: none;
+  }
+  #flash {
+    position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.5s;
+    background: radial-gradient(ellipse at center, rgba(255, 60, 40, 0) 35%, rgba(255, 60, 40, 0.6) 100%);
+  }
+  #flash.on { opacity: 1; transition: none; }
+  #flash.water { background: radial-gradient(ellipse at center, rgba(60, 140, 255, 0) 35%, rgba(60, 140, 255, 0.6) 100%); }
+  #hudWind { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+  #windArrow { width: 18px; height: 18px; flex: none; transition: transform 0.15s linear; }
+
+  /* menu, results, and pause screens */
+  .screen {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(8, 14, 22, 0.5); padding: 14px; box-sizing: border-box;
+  }
+  .panel {
+    width: min(780px, 100%); max-height: 100%; overflow: auto; box-sizing: border-box;
+    background: rgba(14, 22, 32, 0.95); color: #fff; border-radius: 14px; padding: 22px 26px;
+    box-shadow: 0 12px 44px rgba(0, 0, 0, 0.5);
+  }
+  .panel.narrow { width: min(460px, 100%); }
+  .panel h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.15; }
+  .panel h2 { margin: 18px 0 8px; font-size: 15px; font-weight: 700; color: #ffd23f; }
+  .sub { margin: 0 0 14px; opacity: 0.85; font-size: 14px; line-height: 1.45; }
+  .field { display: flex; align-items: center; gap: 10px; font-size: 14px; margin-bottom: 14px; }
+  .field input {
+    flex: 0 1 230px; padding: 8px 10px; border-radius: 8px; font-size: 15px; color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.3); background: rgba(255, 255, 255, 0.1);
+  }
+  .field input:focus { outline: 2px solid #ffd23f; outline-offset: 1px; }
+
+  .courses { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
+  .course {
+    text-align: left; padding: 12px; border-radius: 10px; color: #fff; cursor: pointer;
+    border: 2px solid rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.06);
+  }
+  .course:hover { background: rgba(255, 255, 255, 0.11); }
+  .course:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .course.selected { border-color: #ffd23f; background: rgba(255, 210, 63, 0.13); }
+  .course .cname { display: block; font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+  .course .cmeta { display: block; font-size: 12px; opacity: 0.8; line-height: 1.5; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 11px; font-weight: 700; margin-left: 6px; color: #10202e; vertical-align: 1px; }
+  .chip.easy { background: #8df0a8; } .chip.medium { background: #ffd23f; } .chip.hard { background: #ff8f7d; } .chip.extreme { background: #d2a8ff; }
+
+  .drones { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 8px; }
+  .drone {
+    text-align: left; padding: 9px 8px 10px; border-radius: 10px; color: #fff; cursor: pointer;
+    border: 2px solid rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.06);
+  }
+  .drone:hover { background: rgba(255, 255, 255, 0.11); }
+  .drone:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .drone.selected { border-color: #ffd23f; background: rgba(255, 210, 63, 0.13); }
+  .drone .dname { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 13px; margin-bottom: 7px; white-space: nowrap; }
+  .drone .swatch { width: 12px; height: 12px; border-radius: 50%; flex: none; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35); }
+  .stat { display: grid; grid-template-columns: 54px 1fr; align-items: center; gap: 6px; font-size: 11px; line-height: 1.7; opacity: 0.92; }
+  .stat .bar { height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); overflow: hidden; }
+  .stat .bar i { display: block; height: 100%; background: #8fd3ff; }
+  .stat .txt { font-weight: 600; }
+  #droneBlurb { margin: 10px 0 0; }
+  ol.board { margin: 0; padding: 0; list-style: none; font-size: 14px; font-variant-numeric: tabular-nums; }
+  ol.board li { display: grid; grid-template-columns: 30px 1fr 84px 92px; gap: 8px; white-space: nowrap; padding: 5px 8px; border-radius: 6px; }
+  ol.board li:nth-child(odd) { background: rgba(255, 255, 255, 0.05); }
+  ol.board li.me { background: rgba(255, 210, 63, 0.2); font-weight: 700; }
+  ol.board li.empty { display: block; opacity: 0.7; }
+  ol.board .t, ol.board .c { text-align: right; }
+  ol.board .c { opacity: 0.75; }
+
+  .row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+  .row button {
+    padding: 10px 14px; border-radius: 9px; font-weight: 700; font-size: 15px; cursor: pointer; color: #fff;
+    border: 2px solid rgba(255, 255, 255, 0.3); background: rgba(255, 255, 255, 0.08);
+  }
+  .row button:hover { background: rgba(255, 255, 255, 0.18); }
+  .row button.primary { background: #ffd23f; border-color: #ffd23f; color: #1b2530; }
+  .row button.primary:hover { background: #ffe07a; }
+  .row button.quiet { font-weight: 500; font-size: 13px; opacity: 0.8; margin-left: auto; }
+  .hint { margin: 14px 0 0; font-size: 12px; opacity: 0.7; line-height: 1.6; }
+  .warn { margin: 10px 0 0; font-size: 12px; color: #ffb4a8; }
+
+  .medal { display: inline-block; padding: 3px 14px; border-radius: 99px; font-weight: 800; font-size: 14px; color: #1b2530; margin-bottom: 8px; }
+  .medal.gold { background: #f5c542; } .medal.silver { background: #cfd5db; } .medal.bronze { background: #d98a4a; } .medal.none { background: rgba(255, 255, 255, 0.2); color: #fff; }
+  .bigtime { font-size: 52px; font-weight: 800; line-height: 1.05; font-variant-numeric: tabular-nums; margin: 4px 0 2px; }
+  .breakdown { font-size: 14px; line-height: 1.7; font-variant-numeric: tabular-nums; }
+  .breakdown .pen { color: #ff9d8f; }
+  .breakdown .bon { color: #8df0a8; }
+  .rankline { font-weight: 700; color: #8df0a8; margin: 6px 0 0; min-height: 1.3em; }
+
+  /* Shown only if the browser cannot run WebGL or Three.js fails to load. */
+  #error {
+    display: none; position: absolute; inset: 0;
+    align-items: center; justify-content: center; text-align: center;
+    padding: 24px; background: #1b2530; color: #fff; font-size: 16px;
+  }
+</style>
+</head>
+
+<body>
+<div id="game">
+  <div id="help">
+    <div id="helpKeys"></div>
+    <b>R</b> restart &nbsp; <b>Esc</b> pause<br>
+    Click the game once so it receives the keyboard.
+  </div>
+
+  <canvas id="minimap" width="170" height="170" class="hidden"></canvas>
+  <div id="hud" class="hidden">
+    <div id="hudInfo"><div id="hudCourse"></div><div id="hudPilot"></div><div id="hudBest"></div>
+      <div id="hudWind"><svg id="windArrow" viewBox="-12 -12 24 24"><polygon points="0,-10 7,8 0,4 -7,8" fill="#8fd3ff" stroke="#10202e" stroke-opacity="0.6" stroke-width="1.2"/></svg><span id="hudWindText"></span></div></div>
+    <div id="hudTimer"><div id="hudTime">00:00.0</div><div id="hudGate"></div><div id="hudHits"></div><div id="hudBonus"></div></div>
+  </div>
+  <div id="pointer" class="hidden">
+    <svg id="pointerArrow" viewBox="-16 -16 32 32"><polygon points="13,0 -9,-11 -4,0 -9,11" fill="#ffd23f" stroke="#10202e" stroke-opacity="0.6" stroke-width="1.5"/></svg>
+    <div id="pointerLabel"></div>
+  </div>
+  <div id="banner"></div>
+  <div id="countdown"></div>
+  <div id="flash"></div>
+
+  <div id="menu" class="screen">
+    <div class="panel">
+      <h1>Drone Obstacle Course</h1>
+      <p class="sub">Fly through every gate in order, then land on the pad to finish. Your score is your time, plus penalties, minus bonuses, so the lowest total wins. Fly through the middle of a ring for a bonus: a bullseye takes 1 second off.
+        A hard crash costs 5 seconds and sends you back to the last gate you cleared. Touching the water is a crash too, and so is landing too fast. Watch the wind arrow: it shows which way the wind is pushing you.</p>
+      <label class="field">Pilot name <input id="pilotName" maxlength="14" autocomplete="off" spellcheck="false" placeholder="Your name"></label>
+      <h2>Choose your drone</h2>
+      <div id="droneList" class="drones"></div>
+      <p id="droneBlurb" class="sub"></p>
+      <h2>Choose your course</h2>
+      <div id="courseList" class="courses"></div>
+      <h2 id="boardTitle">Best times</h2>
+      <ol id="boardList" class="board"></ol>
+      <p id="storeNote" class="warn hidden">Scores cannot be saved in this browser window, so they will reset when the page reloads.</p>
+      <div class="row">
+        <button id="btnStart" class="primary">Start race</button>
+        <button id="btnFree">Free flight</button>
+        <button id="btnSound">Sound: on</button>
+        <button id="btnControls">Controls</button>
+        <button id="btnReset" class="quiet">Reset scores</button>
+      </div>
+      <p id="controlHint" class="hint"></p>
+    </div>
+  </div>
+
+  <div id="results" class="screen hidden">
+    <div class="panel narrow">
+      <div id="resMedal" class="medal none"></div>
+      <h1 id="resTitle"></h1>
+      <div id="resPilot" class="sub"></div>
+      <div id="resTotal" class="bigtime"></div>
+      <div id="resBreakdown" class="breakdown"></div>
+      <div id="resRank" class="rankline"></div>
+      <h2>Best times</h2>
+      <ol id="resBoard" class="board"></ol>
+      <div class="row">
+        <button id="btnAgain" class="primary">Fly again</button>
+        <button id="btnNext">Next course</button>
+        <button id="btnMenu">Menu</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="pauseScreen" class="screen hidden">
+    <div class="panel narrow">
+      <h1>Paused</h1>
+      <p class="sub">The clock is stopped.</p>
+      <div class="row">
+        <button id="btnResume" class="primary">Resume</button>
+        <button id="btnRestart">Restart course</button>
+        <button id="btnQuit">Quit to menu</button>
+      </div>
+    </div>
+  </div>
+  <div id="notice"></div>
+  <div id="error"></div>
+</div>
+
+<!-- Three.js (global build, r128) from a CDN that works inside school networks. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<script>
+"use strict";
+
+/* ==========================================================================
+   1. CONFIG - every number you might want to tweak lives here.
+   Units: distances in meters, speeds in m/s, angles in radians unless the
+   name ends in "Deg". Change a value, save, refresh the page, and fly.
+   ========================================================================== */
+const CONFIG = {
+  // ---- Flight (how each drone handles is in the DRONES list below) ----
+  minAltitude:        0.12,  // height of the drone when sitting on the ground (m)
+  maxAltitude:        150,   // ceiling (m, above sea level)
+  groundFriction:     6,     // extra slowing when touching the ground
+
+  // ---- Keyboard feel (keys act like a smooth stick) ----
+  inputRamp:          5,     // how fast a stick moves toward full deflection (units/s)
+  inputReturn:        8,     // how fast a stick returns to center on release (units/s)
+
+  // ---- Rotors ----
+  rotorIdleSpeed:     30,    // rad/s while hovering
+  rotorExtraSpeed:    40,    // extra rad/s when working hard
+
+  // ---- Chase camera ----
+  cameraDistance:     4.5,   // meters behind the drone
+  cameraHeight:       1.8,   // meters above the drone
+  cameraLookHeight:   0.4,   // aim point above the drone
+  cameraSmoothing:    4,     // higher = camera sticks closer to the drone
+  fov:                70,    // field of view in degrees
+
+  // ---- Racing rules ----
+  game: {
+    countdownSeconds: 3,
+    crashSpeed:       4,     // hitting something at this speed (m/s) or more is a crash
+    bumpSpeed:        1.5,   // a gentler hit, at least this fast, is a bump
+    crashPenalty:     5,     // seconds added for a crash (and you restart at the last gate)
+    bumpPenalty:      1,     // seconds added for a bump
+    bullseyeBonus:    1,     // seconds taken off for flying through the very middle of a ring
+    innerBonus:       0.5,   // seconds taken off for the inner band
+    bullseyeRadius:   0.3,   // how big the bullseye is, as a fraction of the ring's radius
+    innerRadius:      0.62,  // how big the inner band is, as a fraction of the ring's radius
+    landingSpeed:     3.5,   // touching down faster than this (m/s) is a hard landing: a crash
+    landingSettle:    0.5,   // seconds you must sit still on the pad to finish
+    minimapSpan:      220,   // how many meters across the minimap shows
+    topScores:        10     // how many times each leaderboard keeps
+  },
+
+  // ---- World ----
+  horizonColor:       0xcfe6f5,  // sky color at the horizon; distant things fade into it
+  fogNear:            120,       // haze starts this far away (m)
+  fogFar:             480,       // everything is fully hazy this far away (m)
+  bounce:             0.3,       // 0 = stops dead against a wall, 1 = bounces back fully
+  world: {
+    radius:           260,       // the edge of the flight area (m from the landing pad)
+    seed:             2024,      // change this number for a different forest and town
+    treeCount:        380,       // fewer trees = faster on slow computers
+    rockCount:        60,
+    cloudCount:       14,
+    terrainSize:      1400,      // size of the ground mesh (m)
+    terrainSegments:  150        // more = smoother hills but slower
+  },
+
+  // ---- Performance (important on low-end school computers) ----
+  pixelRatioCap:      1,     // 1 = sharpest-per-cost. Try 1.5 or 2 on fast machines.
+  antialias:          true
+};
+
+
+/* ==========================================================================
+   1b. COURSES - the race tracks. Edit these to build your own!
+   Each course is a list of gates to fly through IN ORDER. The last gate is the
+   finish line. Every course starts on the landing pad at (0, 0).
+     x, z   where the gate is, in meters from the pad. -z is straight ahead
+            of the pad, +x is to the right.
+     h      height above the ground (m)
+     r      gate size: radius in meters (smaller = harder). Every ring has a target:
+            fly through the bullseye or the inner band for a time bonus (see CONFIG.game).
+     kind   "ring" (a hoop, the default) or "pylons" (two poles to fly between;
+            poles are solid, so clip one and it counts as a hit)
+   The gates turn to face the way you should be flying, automatically.
+
+   wind:    { speed, gust, from, swing }
+            speed  average wind in m/s.  gust  how much it surges (0.5 = +/-50%).
+            from   where it comes FROM, in degrees: 0 = north (straight ahead of the
+                   pad), 90 = east (right), 180 = south, 270 = west.
+            swing  how many degrees the direction wanders.
+            Wind only pushes the drone while it is in the air, and it is weaker
+            among the town's tall buildings.
+
+   obstacles: solid things to fly around. Kinds:
+     { kind: "poles",   at: [[x, z], ...], h }              single poles
+     { kind: "slalom",  from: [x, z], to: [x, z], count, h } a line of poles between two points
+     { kind: "lane",    from, to, width, stations: [0.3, 0.6], h }  pairs of poles that make a narrow lane
+     { kind: "barrier", x, z, w, gap, h }                   a wall (w long) with a gap to fly through
+                        (optional: gapAt = shift the gap along the wall, axis: "z" to run the wall north-south)
+   weather: optional { fog: [near, far], fogColor, tint, light, hideSky } for a stormy or foggy look.
+            hideSky: true replaces the blue sky with plain mist.
+   Hitting the lake counts as a crash. After the last gate you must land on the pad,
+   gently (see landingSpeed in CONFIG.game).
+
+   Medal times are your final time with penalties added, in seconds.
+   ========================================================================== */
+const COURSES = [
+  {
+    id: "training", name: "Training Field", level: "Easy",
+    blurb: "Wide open field. Weave through the poles and find the gap in the wall.",
+    wind: { speed: 2.5, gust: 0.6, from: 45, swing: 8 },
+    medals: { gold: 85, silver: 115, bronze: 160 },
+    gates: [
+      { x:  38, z: -38, h: 6, r: 5 },
+      { x:  65, z:  -5, kind: "pylons", r: 4 },
+      { x:  50, z:  35, h: 8, r: 5 },
+      { x:  10, z:  55, h: 6, r: 5 },
+      { x: -30, z:  45, kind: "pylons", r: 4 },
+      { x: -55, z:  10, h: 7, r: 5 },
+      { x: -50, z: -30, h: 6, r: 5 },
+      { x: -20, z: -50, h: 8, r: 5 },
+      { x:   0, z:  -8, h: 4, r: 4.5 }
+    ],
+    obstacles: [
+      { kind: "slalom",  from: [50, 35], to: [10, 55], count: 3, h: 10 },
+      { kind: "barrier", x: -52, z: -8, w: 44, gap: 10, h: 9 },
+      { kind: "lane",    from: [-20, -50], to: [0, -8], width: 9, stations: [0.3, 0.55], h: 10 }
+    ]
+  },
+  {
+    id: "airfield", name: "Airfield Circuit", level: "Easy",
+    blurb: "A friendly loop around the hangar and classroom in a gentle breeze. Thread the gap between the two buildings.",
+    wind: { speed: 2, gust: 0.5, from: 110, swing: 8 },
+    medals: { gold: 70, silver: 95, bronze: 130 },
+    gates: [
+      { x:  14, z: -28, h: 6,  r: 6 },
+      { x: -10, z: -45, h: 8,  r: 6 },
+      { x: -48, z: -32, h: 10, r: 6 },
+      { x: -54, z:   2, h: 7,  r: 6 },
+      { x: -28, z:  -3, h: 4,  r: 5 },
+      { x:  22, z:  -2, kind: "pylons", r: 4.5 },
+      { x:  36, z:  24, h: 7,  r: 6 },
+      { x:   8, z:  34, h: 6,  r: 6 },
+      { x:   4, z:  14, h: 5,  r: 5 }
+    ],
+    obstacles: [
+      { kind: "slalom", from: [14, -28], to: [-10, -45], count: 2, h: 9 },
+      { kind: "lane",   from: [36, 24], to: [8, 34], width: 11, stations: [0.5], h: 9 },
+      { kind: "barrier", x: -52, z: -15, w: 26, gap: 10, gapAt: 1, h: 9 }
+    ]
+  },
+  {
+    id: "tower", name: "Tower and Lake", level: "Medium",
+    blurb: "Spiral up the radio tower in a crosswind, skim the lake without touching the water, then thread the hangar gap.",
+    wind: { speed: 4.5, gust: 0.7, from: 270, swing: 14 },
+    medals: { gold: 135, silver: 185, bronze: 250 },
+    gates: [
+      { x:   50, z:  30, h: 6,  r: 4.5 },
+      { x:   78, z:  30, h: 10, r: 4 },
+      { x:  100, z:   8, h: 20, r: 4 },
+      { x:  122, z:  30, h: 30, r: 4 },
+      { x:  100, z:  52, h: 40, r: 4 },
+      { x:   60, z:  75, h: 25, r: 4.5 },
+      { x:   10, z:  95, h: 14, r: 4.5 },
+      { x:  -50, z: 105, h: 6,  r: 4.5 },
+      { x: -100, z: 110, h: 5,  r: 4.5 },
+      { x: -135, z: 100, h: 5,  r: 4.5 },
+      { x: -100, z:  60, h: 8,  r: 4.5 },
+      { x:  -60, z:  25, h: 6,  r: 4.5 },
+      { x:  -28, z:  -3, h: 4,  r: 4 },
+      { x:    0, z:  -6, h: 4,  r: 4.5 }
+    ],
+    obstacles: [
+      { kind: "poles",    at: [[89, 19], [111, 19], [111, 41]], h: 40 },
+      { kind: "slalom",   from: [-100, 110], to: [-135, 100], count: 3, h: 8 },
+      { kind: "barrier",  x: -79, z: 42, w: 40, gap: 10, h: 12 },
+      { kind: "slalom",   from: [10, 95], to: [-50, 105], count: 3, h: 16 }
+    ]
+  },
+  {
+    id: "misty", name: "Misty Morning", level: "Medium",
+    blurb: "Thick fog hides everything until you are close. Follow the gates south through the hills, skim across the lake, and find your way home.",
+    wind: { speed: 4, gust: 0.6, from: 200, swing: 15 },
+    weather: { fog: [18, 120], fogColor: 0xc9d3dc, hideSky: true, tint: 0xffffff, light: 0.92 },
+    medals: { gold: 130, silver: 175, bronze: 235 },
+    gates: [
+      { x:   30, z:  40, h: 7, r: 4.5 },
+      { x:   70, z:  85, h: 8, r: 4.5 },
+      { x:  110, z: 115, h: 8, r: 4.5 },
+      { x:   80, z: 160, h: 8, r: 4.5 },
+      { x:   30, z: 175, h: 8, r: 4.5 },
+      { x:  -30, z: 160, h: 8, r: 4.5 },
+      { x:  -70, z: 130, h: 7, r: 4.5 },
+      { x: -105, z: 110, h: 5, r: 4.5 },
+      { x: -100, z:  70, h: 6, r: 4.5 },
+      { x:  -62, z:  28, h: 7, r: 4.5 },
+      { x:  -28, z:  -3, h: 4, r: 4 },
+      { x:    8, z:  -6, h: 4, r: 4.5 }
+    ],
+    obstacles: [
+      { kind: "slalom",  from: [30, 40], to: [70, 85], count: 3, h: 9 },
+      { kind: "lane",    from: [110, 115], to: [80, 160], width: 10, stations: [0.3, 0.62], h: 9 },
+      { kind: "barrier", x: 0, z: 167, w: 44, gap: 10, gapAt: 0.5, axis: "z", h: 10 },
+      { kind: "slalom",  from: [-105, 110], to: [-100, 70], count: 2, h: 8 }
+    ]
+  },
+  {
+    id: "downtown", name: "Downtown Dash", level: "Hard",
+    blurb: "A strong crosswind on the road, then tight city canyons with poles to dodge. The corners are sharp.",
+    wind: { speed: 6, gust: 0.8, from: 90, swing: 20 },
+    medals: { gold: 140, silver: 195, bronze: 280 },
+    gates: [
+      { x:  0, z:  -30, h: 6, r: 4.5 },
+      { x:  0, z:  -58, h: 6, r: 4.5 },
+      { x:  0, z:  -82, h: 7, r: 3.8 },
+      { x:  0, z: -106, h: 7, r: 4 },
+      { x:  0, z: -130, h: 7, r: 3.8 },
+      { x:  0, z: -150, h: 8, r: 4 },
+      { x:  0, z: -172, h: 7, r: 3.8 },
+      { x:  0, z: -194, h: 8, r: 4 },
+      { x: 22, z: -194, h: 8, r: 3.8 },
+      { x: 44, z: -194, h: 8, r: 4 },
+      { x: 44, z: -172, h: 8, r: 3.8 },
+      { x: 44, z: -150, h: 8, r: 4 },
+      { x: 44, z: -128, h: 8, r: 3.8 },
+      { x: 44, z: -106, h: 8, r: 4 },
+      { x: 44, z:  -80, h: 8, r: 3.8 },
+      { x: 44, z:  -58, h: 9, r: 4.5 },
+      { x: 30, z:  -45, h: 8, r: 4.5 },
+      { x: 14, z:   -4, h: 4, r: 4.5 }
+    ],
+    obstacles: [
+      { kind: "barrier", x: 0, z: -44, w: 30, gap: 9, h: 10 },
+      { kind: "poles", at: [[0, -94], [2.6, -118], [0, -140], [0, -161], [-2.6, -183]], h: 9 },     // down the middle street
+      { kind: "poles", at: [[11, -194], [33, -194]], h: 9 },                                          // along the cross street
+      { kind: "poles", at: [[44, -183], [46.6, -161], [44, -139], [41.4, -117], [44, -93]], h: 9 },   // up the east street
+      { kind: "slalom", from: [30, -45], to: [14, -4], count: 3, h: 10 }
+    ]
+  },
+  {
+    id: "summit", name: "Summit Sprint", level: "Hard",
+    blurb: "Race across the flats, climb the east ridge to a 45 meter summit in a gusty crosswind, then dive back down to the pad.",
+    wind: { speed: 6, gust: 0.7, from: 315, swing: 20 },
+    medals: { gold: 165, silver: 235, bronze: 335 },
+    gates: [
+      { x:  50, z:  40, h: 6,  r: 4.5 },
+      { x: 110, z:  70, h: 8,  r: 4.5 },
+      { x: 165, z:  60, h: 8,  r: 4.2 },
+      { x: 200, z:  50, h: 8,  r: 4.2 },
+      { x: 222, z:  30, h: 9,  r: 4 },
+      { x: 240, z:   8, h: 9,  r: 4 },
+      { x: 249, z: -18, h: 8,  r: 3.8 },
+      { x: 230, z: -62, h: 12, r: 4.2 },
+      { x: 190, z: -70, h: 10, r: 4.2 },
+      { x: 140, z: -55, h: 8,  r: 4.2 },
+      { x:  85, z: -45, h: 7,  r: 4.2 },
+      { x:  14, z:  -6, h: 4,  r: 4.5 }
+    ],
+    obstacles: [
+      { kind: "slalom",  from: [110, 70], to: [165, 60], count: 3, h: 10 },
+      { kind: "poles",   at: [[211, 40], [231, 19]], h: 60 },
+      { kind: "barrier", x: 160, z: -62, w: 40, gap: 10, axis: "z", h: 14, gapAt: -0.5 },
+      { kind: "lane",    from: [85, -45], to: [14, -6], width: 9, stations: [0.4, 0.7], h: 10 },
+      { kind: "slalom",  from: [140, -55], to: [85, -45], count: 3, h: 10 },
+      { kind: "lane",    from: [165, 60], to: [200, 50], width: 9, stations: [0.5], h: 10 }
+    ]
+  },
+  {
+    id: "storm", name: "Storm Gauntlet", level: "Extreme",
+    blurb: "A gale, heavy haze, and poles everywhere: down the city canyon, around the tower, across the lake, and home to the pad.",
+    wind: { speed: 7, gust: 0.45, from: 135, swing: 25 },
+    weather: { fog: [45, 240], fogColor: 0x7d8893, tint: 0x78838f, light: 0.72 },
+    medals: { gold: 260, silver: 365, bronze: 520 },
+    gates: [
+      { x:   0, z:  -32, h: 6,  r: 3.6 },
+      { x:   0, z:  -60, h: 6,  r: 3.6 },
+      { x:   0, z:  -86, h: 7,  r: 3.2 },
+      { x:   0, z: -108, h: 7,  r: 3.4 },
+      { x:   0, z: -130, h: 7,  r: 3.2 },
+      { x:   0, z: -150, h: 8,  r: 3.4 },
+      { x:  44, z: -150, h: 8,  r: 3.4 },
+      { x:  92, z: -146, h: 9,  r: 3.6 },
+      { x: 112, z: -100, h: 12, r: 3.8 },
+      { x: 114, z:  -40, h: 16, r: 3.8 },
+      { x: 100, z:   10, h: 20, r: 3.6 },
+      { x: 120, z:   30, h: 28, r: 3.6 },
+      { x: 100, z:   50, h: 36, r: 3.6 },
+      { x:  80, z:   30, h: 40, r: 3.6 },
+      { x:  40, z:   50, h: 28, r: 3.8 },
+      { x: -60, z:  100, h: 8,  r: 3.8 },
+      { x: -105, z: 108, h: 4,  r: 3.4 },
+      { x: -135, z:  95, h: 4,  r: 3.4 },
+      { x: -100, z:  55, h: 8,  r: 3.8 },
+      { x:  -60, z:  22, h: 6,  r: 3.8 },
+      { x:  -28, z:  -3, h: 4,  r: 3.6 },
+      { x:   12, z:  -4, h: 5,  r: 4 }
+    ],
+    obstacles: [
+      { kind: "barrier", x: 0, z: -45, w: 24, gap: 8, h: 10 },
+      { kind: "poles",   at: [[0, -73], [0, -97], [2.2, -119], [0, -140]], h: 10 },
+      { kind: "poles",   at: [[22, -150], [68, -150]], h: 10 },
+      { kind: "slalom",  from: [92, -146], to: [112, -100], count: 3, h: 10 },
+      { kind: "slalom",  from: [112, -100], to: [114, -40], count: 4, h: 12 },
+      { kind: "poles",   at: [[110, 20], [110, 40], [90, 40]], h: 48 },
+      { kind: "slalom",  from: [40, 50], to: [-60, 100], count: 4, h: 18 },
+      { kind: "slalom",  from: [-105, 108], to: [-135, 95], count: 3, h: 8 },
+      { kind: "barrier", x: -82, z: 40, w: 40, gap: 9, h: 12 },
+      { kind: "poles",   at: [[-10, -11], [10, -11], [-10, 11], [10, 11]], h: 9 }
+    ]
+  }
+];
+
+
+/* ==========================================================================
+   1c. DRONES - the types you can fly. Edit these to design your own!
+     accel          how hard the sticks push sideways (m/s squared). Bigger = quicker to react.
+     drag           air resistance (per second). Bigger = stops sooner. Smaller = coasts a long way.
+                    Top speed is roughly accel / drag.
+     maxSpeed       the most speed it can get through the air (m/s)
+     climb          up/down speed at full throttle (m/s)
+     climbResponse  how quickly the climb follows the throttle (bigger = snappier)
+     yaw            turning speed at full stick (radians per second)
+     tiltDeg        how far it leans when flying (just for looks)
+     radius         how wide it is (m): it bumps into things this far out, and a wide drone
+                    has less room to spare inside a gate
+     windFactor     how much the wind pushes it: 1 = normal, below 1 = steadier, above 1 = blown about
+     stats          the little bars on the menu card (1 to 5)
+     medalScale     multiplies the medal times, because a slower drone needs more time
+     look           what it looks like (see buildDroneModel)
+   Each drone has its own leaderboard, so pilots only race against the same type.
+   ========================================================================== */
+const DRONES = [
+  {
+    id: "trainer", name: "Trainer",
+    blurb: "Balanced and forgiving. A good place to start.",
+    stats: { speed: 3, agility: 3, wind: 3, size: "Medium" },
+    medalScale: 1,
+    accel: 22, drag: 1.6, maxSpeed: 14, climb: 6, climbResponse: 4, yaw: 1.8, tiltDeg: 25, tiltResponse: 6,
+    radius: 0.65, windFactor: 1,
+    look: { scale: 1, rotors: 4, ring: 0.65, blade: 0.62, body: [0.46, 0.16, 0.66], lift: 0, extra: null,
+            bodyColor: 0x2b2f36, armColor: 0x4a525d, front: 0xff7a1a, rear: 0x35c6ff, bladeColor: 0xd9dde2, swatch: "#ff7a1a" }
+  },
+  {
+    id: "racer", name: "Racer",
+    blurb: "Very fast and twitchy. Wins on open ground, but one slip in a tight space is a crash.",
+    stats: { speed: 5, agility: 5, wind: 3, size: "Small" },
+    medalScale: 0.75,
+    accel: 34, drag: 1.35, maxSpeed: 20, climb: 9, climbResponse: 7, yaw: 2.8, tiltDeg: 38, tiltResponse: 9,
+    radius: 0.5, windFactor: 0.9,
+    look: { scale: 0.8, rotors: 4, ring: 0.62, blade: 0.6, body: [0.32, 0.12, 0.84], lift: 0, extra: "canopy",
+            bodyColor: 0x1c1c22, armColor: 0x2e2e36, front: 0xff3b30, rear: 0xffd23f, bladeColor: 0x9fb3c8, swatch: "#ff3b30" }
+  },
+  {
+    id: "camera", name: "Photographer",
+    blurb: "Smooth and steady with a camera gimbal. Wind barely moves it, but it is slow and gentle.",
+    stats: { speed: 2, agility: 2, wind: 5, size: "Medium" },
+    medalScale: 1.4,
+    accel: 17, drag: 1.9, maxSpeed: 10.5, climb: 4.5, climbResponse: 3, yaw: 1.3, tiltDeg: 14, tiltResponse: 3.5,
+    radius: 0.7, windFactor: 0.45,
+    look: { scale: 1.08, rotors: 4, ring: 0.65, blade: 0.66, body: [0.5, 0.2, 0.62], lift: 0.2, extra: "gimbal",
+            bodyColor: 0xeeeeee, armColor: 0xb4bbc4, front: 0x2e7bff, rear: 0xffffff, bladeColor: 0xd9dde2, swatch: "#2e7bff" }
+  },
+  {
+    id: "cargo", name: "Hauler",
+    blurb: "Big and heavy with six rotors. Wind hardly bothers it, but it is slow to turn and stop, and tight gaps are hard.",
+    stats: { speed: 2, agility: 1, wind: 5, size: "Large" },
+    medalScale: 1.2,
+    accel: 15, drag: 0.85, maxSpeed: 11, climb: 4, climbResponse: 2.2, yaw: 1.1, tiltDeg: 12, tiltResponse: 3,
+    radius: 0.95, windFactor: 0.6,
+    look: { scale: 1.46, rotors: 6, ring: 0.6, blade: 0.5, body: [0.5, 0.2, 0.5], lift: 0.32, extra: "crate",
+            bodyColor: 0xf2b705, armColor: 0x3b3f46, front: 0xff7a1a, rear: 0x2f3640, bladeColor: 0x4a525d, swatch: "#f2b705" }
+  },
+  {
+    id: "micro", name: "Micro",
+    blurb: "Tiny and quick. It slips through gaps easily, but the wind pushes it around.",
+    stats: { speed: 3, agility: 4, wind: 1, size: "Tiny" },
+    medalScale: 1.2,
+    accel: 22, drag: 1.8, maxSpeed: 12, climb: 5, climbResponse: 5, yaw: 2.4, tiltDeg: 30, tiltResponse: 8,
+    radius: 0.35, windFactor: 1.2,
+    look: { scale: 0.54, rotors: 4, ring: 0.65, blade: 0.62, body: [0.4, 0.14, 0.5], lift: 0, extra: "guards",
+            bodyColor: 0x7c4dff, armColor: 0x3a2f6b, front: 0xffd23f, rear: 0x8df0a8, bladeColor: 0xf4f4f4, swatch: "#7c4dff" }
+  }
+];
+let craft = DRONES[0];          // the drone type being flown right now
+const REF_RADIUS = 0.65;        // the Trainer's width: gates are sized for it
+
+
+/* ==========================================================================
+   2. SETUP - renderer, scene, lights, camera, and the ground
+   ========================================================================== */
+const container = document.getElementById("game");
+const errorBox  = document.getElementById("error");
+
+function showError(message) {
+  errorBox.textContent = message;
+  errorBox.style.display = "flex";
+}
+
+if (typeof THREE === "undefined") {
+  showError("The 3D library could not be loaded. Check your internet connection and refresh the page.");
+  throw new Error("Three.js not loaded");
+}
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: CONFIG.antialias, powerPreference: "low-power" });
+} catch (e) {
+  showError("This browser could not start 3D graphics (WebGL). Try a different browser or update this one.");
+  throw e;
+}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, CONFIG.pixelRatioCap));
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(CONFIG.horizonColor);
+scene.fog = new THREE.Fog(CONFIG.horizonColor, CONFIG.fogNear, CONFIG.fogFar); // distant things fade into haze
+
+const camera = new THREE.PerspectiveCamera(CONFIG.fov, 1, 0.3, 1500);
+
+// Lighting: soft sky/ground light plus one "sun". No shadows (they are costly).
+const LIGHT_BASE = { hemi: 0.68, sun: 0.5 };                       // normal brightness (storms turn it down)
+const hemi = new THREE.HemisphereLight(0xffffff, 0x5a7a5a, LIGHT_BASE.hemi);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, LIGHT_BASE.sun);
+sun.position.set(30, 60, 20);
+scene.add(sun);
+
+// (The ground, sky, town, and trees are built in the WORLD section below.)
+
+
+/* ==========================================================================
+   3. WORLD - terrain, town, forest, lake, and sky
+   Everything is built once at start-up from simple shapes and a seeded random
+   number generator, so the world is identical every time you load it. Change
+   CONFIG.world.seed to get a different forest and town.
+
+   Map (looking down; the drone starts on the pad, facing the road):
+        mountains all the way around, with a valley opening ahead (-Z)
+        the town sits in that valley, at the end of the road
+        the training field, landing pad, and hangar are at the center
+        the lake is behind and to the left; a radio tower stands to the right
+   ========================================================================== */
+const WORLD = CONFIG.world;
+const WATER_LEVEL = -1.5;                         // lake surface height (m)
+const TOWN = { x: 0, z: -150, cols: 4, rows: 4, pitch: 44, block: 34 };
+const LAKE = { x: -120, z: 110, flatR: 26, shoreR: 60, waterR: 48 };
+const PAD = { x: 0, z: 0, r: 4 };                   // the landing pad: its middle and its radius (m)
+const ROAD = { halfWidth: 3.5, fromZ: -3, toZ: TOWN.z + (TOWN.rows * TOWN.pitch) / 2 };
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// 0 below `a`, 1 above `b`, and a smooth S-curve in between.
+function smoothstep(a, b, x) {
+  const t = clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+// A seeded random number generator: the same seed always gives the same sequence.
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rand = mulberry32(WORLD.seed);
+
+// Race paths are kept free of random trees and rocks, so the obstacles are the ones we chose.
+const CORRIDOR = 9;                                                // meters either side of a path
+const coursePaths = COURSES.map(c => [{ x: 0, z: 0 }].concat(c.gates));
+function nearCourse(x, z, margin) {
+  for (const path of coursePaths) {
+    for (let i = 1; i < path.length; i++) {
+      if (distToSegment(x, z, path[i - 1].x, path[i - 1].z, path[i].x, path[i].z) < margin) return true;
+    }
+  }
+  return false;
+}
+
+function distToSegment(px, pz, ax, az, bx, bz) {  // distance from a point to a line segment
+  const abx = bx - ax, abz = bz - az;
+  const t = clamp(((px - ax) * abx + (pz - az) * abz) / (abx * abx + abz * abz), 0, 1);
+  return Math.hypot(px - (ax + t * abx), pz - (az + t * abz));
+}
+
+/* ---------------- Terrain height: one function answers "how high is the ground here?" ----------------
+   The same function builds the visible hills AND tells the physics where the ground is,
+   so the picture and the collisions always agree. */
+
+// 0 on the flat places (field, road, town) and 1 out in the wild. Hills fade in between.
+function flatMask(x, z) {
+  const field    = smoothstep(50, 100, Math.hypot(x, z));
+  const corridor = smoothstep(18, 60, distToSegment(x, z, 0, 0, TOWN.x, TOWN.z));
+  const town     = smoothstep(125, 175, Math.hypot(x - TOWN.x, z - TOWN.z));
+  return Math.min(field, corridor, town);
+}
+
+function terrainHeight(x, z) {
+  // Rolling hills: a few sine waves added together.
+  const hills = 2 + 5.5 * Math.sin(x * 0.011 + 1.3) * Math.cos(z * 0.013)
+                  + 3.0 * Math.sin(x * 0.027 + z * 0.021)
+                  + 1.8 * Math.cos(z * 0.045 - x * 0.019);
+
+  // A ring of mountains. Its height changes with the compass angle so it is not a perfect circle.
+  const angle = Math.atan2(z, x);
+  const ringHeight = 60 + 28 * Math.sin(angle * 5 + 1) + 18 * Math.sin(angle * 11 + 2) + 10 * Math.sin(angle * 23);
+  const mountains = smoothstep(190, 330, Math.hypot(x, z)) * ringHeight;
+
+  const softHills = 2 * Math.log(1 + Math.exp(hills / 2));      // like max(hills, 0) but with no sharp crease
+  const h = (softHills + mountains) * flatMask(x, z);
+
+  // The lake: the land dips down to a basin 4 m below zero.
+  const lake = 1 - smoothstep(LAKE.flatR, LAKE.shoreR, Math.hypot(x - LAKE.x, z - LAKE.z));
+  return h * (1 - lake) + (-4) * lake;
+}
+
+// What the drone can land on: the ground, or the lake surface.
+function groundHeightAt(x, z) {
+  return Math.max(terrainHeight(x, z), WATER_LEVEL);
+}
+
+// Which way is "up" on the slope here? (Used to tilt the drone's shadow to match the ground.)
+function terrainNormal(x, z, out) {
+  const e = 1.5;
+  out.set(-(terrainHeight(x + e, z) - terrainHeight(x - e, z)) / (2 * e), 1,
+          -(terrainHeight(x, z + e) - terrainHeight(x, z - e)) / (2 * e));
+  return out.normalize();
+}
+
+/* ---------------- Solid objects ----------------
+   Buildings are boxes and trees/poles are cylinders. We only check them from above
+   (a flat footprint plus a height), which is simple and fast. */
+const colliders = [];                       // the permanent world
+const courseColliders = [];                 // obstacles that belong to the current race
+function addCylinderCollider(x, z, r, top) { colliders.push({ kind: "cyl", x, z, r, top }); }
+function addBoxCollider(x0, x1, z0, z1, top) { colliders.push({ kind: "box", x0, x1, z0, z1, top }); }
+
+// How hard did the drone hit something this frame? (speed straight into the surface, m/s)
+let worldImpact = 0;
+let waterHit = false;               // true on a frame when the drone touched the lake
+let touchdownSpeed = 0;             // on the frame the drone first touches the ground: how fast it was sinking (m/s)
+let supportHeight = -Infinity;
+
+function collideWith(c) {
+  const R = craft.radius;
+  const bottomNow  = drone.pos.y - CONFIG.minAltitude;     // the drone's feet
+  const bottomPrev = drone.prevY - CONFIG.minAltitude;
+  let nx, nz, depth;                                       // direction and distance to push out
+
+  if (c.kind === "cyl") {
+    const dx = drone.pos.x - c.x, dz = drone.pos.z - c.z, reach = c.r + R;
+    const d2 = dx * dx + dz * dz;
+    if (d2 >= reach * reach) return;
+    const d = Math.sqrt(d2) || 1e-4;
+    nx = dx / d; nz = dz / d; depth = reach - d;
+  } else {
+    const cx = clamp(drone.pos.x, c.x0, c.x1), cz = clamp(drone.pos.z, c.z0, c.z1);
+    const dx = drone.pos.x - cx, dz = drone.pos.z - cz;
+    const d2 = dx * dx + dz * dz;
+    if (d2 >= R * R) return;
+    if (d2 > 1e-8) {                                       // outside the box: push straight away from it
+      const d = Math.sqrt(d2);
+      nx = dx / d; nz = dz / d; depth = R - d;
+    } else {                                               // center is inside: leave by the nearest side
+      const dl = drone.pos.x - c.x0, dr = c.x1 - drone.pos.x;
+      const dn = drone.pos.z - c.z0, df = c.z1 - drone.pos.z;
+      const m = Math.min(dl, dr, dn, df);
+      nx = 0; nz = 0;
+      if (m === dl) nx = -1; else if (m === dr) nx = 1; else if (m === dn) nz = -1; else nz = 1;
+      depth = m + R;
+    }
+  }
+
+  // Above the top (or was last frame)? Then it is flying over, and can land on it.
+  if (bottomNow >= c.top - 0.05 || bottomPrev >= c.top - 0.05) {
+    if (c.top > supportHeight) supportHeight = c.top;
+    return;
+  }
+
+  // Otherwise it ran into the side.
+  drone.pos.x += nx * depth;
+  drone.pos.z += nz * depth;
+  const into = drone.vel.x * nx + drone.vel.z * nz;        // speed toward the object (negative)
+  if (into < 0) {
+    if (-into > worldImpact) worldImpact = -into;
+    drone.vel.x -= (1 + CONFIG.bounce) * into * nx;
+    drone.vel.z -= (1 + CONFIG.bounce) * into * nz;
+  }
+}
+
+// Pushes the drone out of anything it overlaps and removes the speed that was driving it in.
+// Returns the height of the highest rooftop (or treetop) the drone is above, so it can land there.
+function resolveWorldCollisions() {
+  worldImpact = 0;
+  supportHeight = -Infinity;
+  for (let i = 0; i < colliders.length; i++) collideWith(colliders[i]);
+  for (let i = 0; i < courseColliders.length; i++) collideWith(courseColliders[i]);
+  return supportHeight;
+}
+
+/* ---------------- On-screen message ---------------- */
+const noticeEl = document.getElementById("notice");
+let noticeUntil = 0;
+function showNotice(message) {
+  if (performance.now() > noticeUntil) noticeEl.textContent = message;
+  noticeEl.classList.add("show");
+  noticeUntil = performance.now() + 1800;
+}
+
+/* ---------------- Terrain mesh ---------------- */
+const TERRAIN_COLORS = {
+  grassA: new THREE.Color("#69b36f"), grassB: new THREE.Color("#4f9a5a"),
+  sand:   new THREE.Color("#d9c98b"), rock:   new THREE.Color("#8d8a84"),
+  snow:   new THREE.Color("#f2f5f7")
+};
+
+function terrainColor(x, z, h, out) {
+  const patch = 0.5 + 0.5 * Math.sin(x * 0.05 + 1.0) * Math.sin(z * 0.043);   // soft light/dark patches
+  out.copy(TERRAIN_COLORS.grassA).lerp(TERRAIN_COLORS.grassB, patch);
+  const nearLake = 1 - smoothstep(LAKE.shoreR, LAKE.shoreR + 25, Math.hypot(x - LAKE.x, z - LAKE.z));
+  out.lerp(TERRAIN_COLORS.sand, nearLake * (1 - smoothstep(WATER_LEVEL + 0.4, WATER_LEVEL + 1.6, h)));  // beaches
+  out.lerp(TERRAIN_COLORS.rock, smoothstep(32, 52, h));                                    // bare rock up high
+  out.lerp(TERRAIN_COLORS.snow, smoothstep(88, 100, h));                                   // snowy peaks
+  return out;
+}
+
+function makeGrassTexture() {      // faint light/dark squares so you can see yourself moving over open ground
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d");
+  g.fillStyle = "#ffffff"; g.fillRect(0, 0, 64, 64);
+  g.fillStyle = "#f3f3f3"; g.fillRect(0, 0, 32, 32); g.fillRect(32, 32, 32, 32);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  const repeats = WORLD.terrainSize / 16;                    // one pattern repeat = 16 m
+  tex.repeat.set(repeats, repeats);
+  tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  return tex;
+}
+
+function buildTerrain() {
+  let geo = new THREE.PlaneGeometry(WORLD.terrainSize, WORLD.terrainSize, WORLD.terrainSegments, WORLD.terrainSegments);
+  geo.rotateX(-Math.PI / 2);                                 // lay it flat
+
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const h = terrainHeight(x, z);
+    pos.setY(i, h);                                          // raise each point to the ground height
+    terrainColor(x, z, h, c);
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+
+  geo = geo.toNonIndexed();                                  // give every triangle its own corners...
+  geo.computeVertexNormals();                                // ...so each one is lit flat: a low-poly look
+
+  const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, map: makeGrassTexture() }));
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+}
+
+function buildWater() {
+  const water = new THREE.Mesh(
+    new THREE.CircleGeometry(LAKE.waterR, 40),
+    new THREE.MeshLambertMaterial({ color: 0x2f78b8, transparent: true, opacity: 0.88 })
+  );
+  water.rotation.x = -Math.PI / 2;
+  water.position.set(LAKE.x, WATER_LEVEL, LAKE.z);
+  scene.add(water);
+}
+
+/* ---------------- Sky: a big gradient dome and a sun that follow the camera ---------------- */
+const SUN_DIR = new THREE.Vector3(30, 60, 20).normalize();   // same direction as the light
+
+function buildSky() {
+  const geo = new THREE.SphereGeometry(1000, 20, 12);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const top = new THREE.Color("#4f9fe0"), horizon = new THREE.Color(CONFIG.horizonColor), c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const t = clamp(pos.getY(i) / 1000, 0, 1);               // 0 at the horizon, 1 straight up
+    c.copy(horizon).lerp(top, Math.pow(t, 0.6));
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  const dome = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+    vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }));
+  dome.renderOrder = -10;
+  dome.frustumCulled = false;
+  scene.add(dome);
+
+  const disc = new THREE.Mesh(new THREE.SphereGeometry(32, 12, 8),
+                              new THREE.MeshBasicMaterial({ color: 0xfff2bf, fog: false }));
+  disc.frustumCulled = false;
+  scene.add(disc);
+  return { dome, disc };
+}
+
+/* ---------------- Landing pad, road, and town pavement (flat pictures laid on the ground) ---------------- */
+function makePadTexture() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 256;
+  const g = c.getContext("2d");
+  g.fillStyle = "#8d9399"; g.fillRect(0, 0, 256, 256);
+  g.strokeStyle = "#ffd23f"; g.lineWidth = 10;
+  g.beginPath(); g.arc(128, 128, 112, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = "#ffffff"; g.font = "bold 130px Arial, sans-serif";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillText("H", 128, 138);
+  return new THREE.CanvasTexture(c);
+}
+
+function makeRoadTexture(length) {
+  const c = document.createElement("canvas");
+  c.width = 64; c.height = 128;
+  const g = c.getContext("2d");
+  g.fillStyle = "#3f444a"; g.fillRect(0, 0, 64, 128);
+  g.fillStyle = "#d9d9d9"; g.fillRect(2, 0, 3, 128); g.fillRect(59, 0, 3, 128);   // edge lines
+  g.fillStyle = "#ffd23f"; g.fillRect(30, 16, 4, 48);                            // center dash
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1, length / 12);                                                // one dash pattern per 12 m
+  tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  return tex;
+}
+
+function buildGroundDetails() {
+  // These sit a hair above the ground. "polygonOffset" stops them flickering against it.
+  const decal = extra => Object.assign({ polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }, extra);
+
+  const pad = new THREE.Mesh(new THREE.CircleGeometry(PAD.r, 32), new THREE.MeshLambertMaterial(decal({ map: makePadTexture() })));
+  pad.rotation.x = -Math.PI / 2;
+  pad.position.set(0, 0.05, 0);
+  scene.add(pad);
+
+  const roadLength = ROAD.fromZ - ROAD.toZ;
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(ROAD.halfWidth * 2, roadLength),
+                              new THREE.MeshLambertMaterial(decal({ map: makeRoadTexture(roadLength) })));
+  road.rotation.x = -Math.PI / 2;
+  road.position.set(0, 0.04, (ROAD.fromZ + ROAD.toZ) / 2);
+  scene.add(road);
+
+  const asphalt = new THREE.Mesh(new THREE.PlaneGeometry(TOWN.cols * TOWN.pitch, TOWN.rows * TOWN.pitch),
+                                 new THREE.MeshLambertMaterial(decal({ color: 0x464b52 })));
+  asphalt.rotation.x = -Math.PI / 2;
+  asphalt.position.set(TOWN.x, 0.04, TOWN.z);
+  scene.add(asphalt);
+}
+
+/* ---------------- Buildings ----------------
+   Every building in the world goes into just TWO merged meshes (walls and roofs),
+   so a whole town costs the computer almost nothing to draw. */
+function makeWindowTexture() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d");
+  g.fillStyle = "#f4f4f4"; g.fillRect(0, 0, 64, 64);              // wall
+  g.fillStyle = "#34495e"; g.fillRect(12, 14, 40, 34);            // window
+  g.fillStyle = "#506a85"; g.fillRect(12, 14, 40, 10);            // sky reflection
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  return tex;
+}
+
+function createCityBuilder() {
+  const walls = { pos: [], nor: [], uv: [], col: [] };
+  const roofs = { pos: [], nor: [], uv: null, col: [] };
+
+  // Adds one flat four-cornered face as two triangles.
+  function quad(arr, v, n, uv, color) {
+    for (const k of [0, 1, 2, 0, 2, 3]) {
+      arr.pos.push(v[k][0], v[k][1], v[k][2]);
+      arr.nor.push(n[0], n[1], n[2]);
+      if (arr.uv) arr.uv.push(uv[k][0], uv[k][1]);
+      arr.col.push(color.r, color.g, color.b);
+    }
+  }
+
+  return {
+    addBuilding(cx, cz, w, d, h, baseY, wallHex, roofHex) {
+      const x0 = cx - w / 2, x1 = cx + w / 2, z0 = cz - d / 2, z1 = cz + d / 2;
+      const y0 = baseY, y1 = baseY + h;
+      const wc = new THREE.Color(wallHex), rc = new THREE.Color(roofHex);
+      // How many windows fit across each side and up the height (whole numbers look tidier).
+      const uw = Math.max(1, Math.round(w / 3.2)), ud = Math.max(1, Math.round(d / 3.2)), vh = Math.max(1, Math.round(h / 3.4));
+      quad(walls, [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]], [0,0,1],  [[0,0],[uw,0],[uw,vh],[0,vh]], wc);   // front
+      quad(walls, [[x1,y0,z0],[x0,y0,z0],[x0,y1,z0],[x1,y1,z0]], [0,0,-1], [[0,0],[uw,0],[uw,vh],[0,vh]], wc);   // back
+      quad(walls, [[x1,y0,z1],[x1,y0,z0],[x1,y1,z0],[x1,y1,z1]], [1,0,0],  [[0,0],[ud,0],[ud,vh],[0,vh]], wc);   // right
+      quad(walls, [[x0,y0,z0],[x0,y0,z1],[x0,y1,z1],[x0,y1,z0]], [-1,0,0], [[0,0],[ud,0],[ud,vh],[0,vh]], wc);   // left
+      quad(roofs, [[x0,y1,z1],[x1,y1,z1],[x1,y1,z0],[x0,y1,z0]], [0,1,0], null, rc);                              // roof
+      addBoxCollider(x0, x1, z0, z1, y1);
+    },
+    addSlab(x0, x1, z0, z1, y, hex) {                              // a flat paving slab (no collision)
+      quad(roofs, [[x0,y,z1],[x1,y,z1],[x1,y,z0],[x0,y,z0]], [0,1,0], null, new THREE.Color(hex));
+    },
+    finish() {
+      const make = (arr, material) => {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute("position", new THREE.Float32BufferAttribute(arr.pos, 3));
+        g.setAttribute("normal",   new THREE.Float32BufferAttribute(arr.nor, 3));
+        g.setAttribute("color",    new THREE.Float32BufferAttribute(arr.col, 3));
+        if (arr.uv) g.setAttribute("uv", new THREE.Float32BufferAttribute(arr.uv, 2));
+        const mesh = new THREE.Mesh(g, material);
+        mesh.frustumCulled = false;
+        scene.add(mesh);
+      };
+      make(walls, new THREE.MeshLambertMaterial({ map: makeWindowTexture(), vertexColors: true }));
+      make(roofs, new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true,
+                                                  polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+    }
+  };
+}
+
+const WALL_COLORS = ["#c9c2b6", "#b8c4cf", "#d8c3a5", "#a9b7a5", "#cdb4b0", "#b5b9c6", "#e0dcd0"];
+const ROOF_COLORS = ["#6b6f73", "#7b5d4a", "#55606b", "#8a4f45"];
+const pick = list => list[Math.floor(rand() * list.length)];
+
+// The hangar and classroom next to the landing pad.
+function buildAirfieldBuildings(city) {
+  city.addBuilding(-28, -18, 18, 12, 7, 0, "#e8e8e8", "#b23b32");   // hangar
+  city.addBuilding(-28,  10, 10,  8, 4, 0, "#d8c3a5", "#55606b");   // classroom hut
+}
+
+// The town: a grid of city blocks. Returns the spots where park trees should go.
+function buildTown(city) {
+  const parkTrees = [];
+  for (let i = 0; i < TOWN.cols; i++) {
+    for (let j = 0; j < TOWN.rows; j++) {
+      const bx = TOWN.x + (i - (TOWN.cols - 1) / 2) * TOWN.pitch;
+      const bz = TOWN.z + (j - (TOWN.rows - 1) / 2) * TOWN.pitch;
+      const half = TOWN.block / 2;
+      city.addSlab(bx - half, bx + half, bz - half, bz + half, 0.1, "#a3a8ad");   // pavement for the block
+
+      // Buildings are taller toward the middle of town.
+      const center = 1 - Math.min(1, Math.hypot(bx - TOWN.x, bz - TOWN.z) / 110);
+      const tall = () => 7 + rand() * 14 + center * rand() * 28;
+      const roll = rand();
+
+      if (roll < 0.18) {                                            // a park: just trees
+        for (let k = 0; k < 10; k++) {
+          parkTrees.push({ x: bx + (rand() * 2 - 1) * 14, z: bz + (rand() * 2 - 1) * 14, y: 0.1, s: 0.7 + rand() * 0.5 });
+        }
+      } else if (roll < 0.45) {                                     // one big building
+        const w = 26 + rand() * 4, d = 26 + rand() * 4;
+        city.addBuilding(bx, bz, w, d, tall(), 0.1, pick(WALL_COLORS), pick(ROOF_COLORS));
+      } else if (roll < 0.75) {                                     // two side-by-side
+        for (const dx of [-8, 8]) city.addBuilding(bx + dx, bz, 13, 26 + rand() * 4, tall(), 0.1, pick(WALL_COLORS), pick(ROOF_COLORS));
+      } else {                                                      // four small ones
+        for (const dx of [-8, 8]) for (const dz of [-8, 8]) {
+          city.addBuilding(bx + dx, bz + dz, 13, 13, tall() * 0.8, 0.1, pick(WALL_COLORS), pick(ROOF_COLORS));
+        }
+      }
+    }
+  }
+  return parkTrees;
+}
+
+/* ---------------- Trees and rocks (many copies of one shape, drawn in one go) ---------------- */
+const dummy = new THREE.Object3D();      // a stand-in used to build each copy's position/size
+
+function flatFaceted(geo) {              // sharp, flat-shaded faces for a low-poly look
+  const out = geo.index ? geo.toNonIndexed() : geo;   // give every triangle its own corners
+  out.computeVertexNormals();
+  return out;
+}
+
+function scatterTrees(parkTrees) {
+  const list = parkTrees.slice();
+  const wanted = WORLD.treeCount;
+  for (let tries = 0; list.length < wanted + parkTrees.length && tries < wanted * 60; tries++) {
+    const x = (rand() * 2 - 1) * 290, z = (rand() * 2 - 1) * 290;
+    if (Math.hypot(x, z) > 290) continue;                                   // a little beyond the flight area, so the edge looks wooded
+    if (flatMask(x, z) < 0.55) continue;                                    // keep the field, road, and town clear
+    if (nearCourse(x, z, CORRIDOR)) continue;                               // keep race paths clear
+    if (Math.hypot(x - LAKE.x, z - LAKE.z) < 55) continue;                  // none in the lake
+    const h = terrainHeight(x, z);
+    if (h < WATER_LEVEL + 1.2 || h > 38) continue;                          // none on beaches or bare peaks
+    // Forests grow in patches: a wavy "forest-ness" number, plus a few lone trees.
+    const d = 0.5 + 0.5 * Math.sin(x * 0.018 + 0.7) * Math.sin(z * 0.021 - 0.4) + 0.25 * Math.sin((x + z) * 0.045);
+    if (rand() > smoothstep(0.4, 0.8, d) * 0.95 + 0.04) continue;
+    list.push({ x, z, y: h, s: 0.8 + rand() * 0.8 });
+  }
+
+  const trunkGeo = new THREE.CylinderGeometry(0.22, 0.3, 1.8, 6);  trunkGeo.translate(0, 0.9, 0);
+  const lowGeo   = flatFaceted(new THREE.ConeGeometry(1.7, 3.6, 7)); lowGeo.translate(0, 3.2, 0);
+  const upGeo    = flatFaceted(new THREE.ConeGeometry(1.2, 3.0, 7)); upGeo.translate(0, 5.1, 0);
+
+  const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshLambertMaterial({ color: 0x6b4a2f }), list.length);
+  const lows   = new THREE.InstancedMesh(lowGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), list.length);
+  const ups    = new THREE.InstancedMesh(upGeo,  new THREE.MeshLambertMaterial({ color: 0xffffff }), list.length);
+  const tint = new THREE.Color();
+
+  list.forEach((t, i) => {
+    dummy.position.set(t.x, t.y, t.z);
+    dummy.rotation.set(0, rand() * Math.PI * 2, 0);
+    dummy.scale.set(t.s, t.s, t.s);
+    dummy.updateMatrix();
+    trunks.setMatrixAt(i, dummy.matrix);
+    lows.setMatrixAt(i, dummy.matrix);
+    ups.setMatrixAt(i, dummy.matrix);
+    tint.setHSL(0.30 + rand() * 0.06, 0.45 + rand() * 0.15, 0.22 + rand() * 0.10);   // a slightly different green each
+    lows.setColorAt(i, tint);
+    ups.setColorAt(i, tint);
+    addCylinderCollider(t.x, t.z, 1.0 * t.s, t.y + 6.6 * t.s * 0.92);
+  });
+  for (const m of [trunks, lows, ups]) { m.frustumCulled = false; scene.add(m); }
+  return list.length;
+}
+
+function scatterRocks() {
+  const geo = flatFaceted(new THREE.DodecahedronGeometry(1, 0));
+  const rocks = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0xffffff }), WORLD.rockCount);
+  const tint = new THREE.Color();
+  let n = 0;
+  for (let tries = 0; n < WORLD.rockCount && tries < WORLD.rockCount * 60; tries++) {
+    const x = (rand() * 2 - 1) * 290, z = (rand() * 2 - 1) * 290;
+    if (flatMask(x, z) < 0.3 || Math.hypot(x - LAKE.x, z - LAKE.z) < 50 || nearCourse(x, z, CORRIDOR)) continue;
+    const h = terrainHeight(x, z);
+    if (h < WATER_LEVEL + 1) continue;
+    const s = 0.6 + rand() * 1.8;
+    dummy.position.set(x, h + s * 0.25, z);
+    dummy.rotation.set(rand() * 3, rand() * 3, rand() * 3);
+    dummy.scale.set(s, s * 0.7, s);
+    dummy.updateMatrix();
+    rocks.setMatrixAt(n, dummy.matrix);
+    const g = 0.45 + rand() * 0.2;
+    tint.setRGB(g, g * 0.98, g * 0.94);
+    rocks.setColorAt(n, tint);
+    addCylinderCollider(x, z, s * 0.8, h + s * 0.7);
+    n++;
+  }
+  rocks.count = n;
+  rocks.frustumCulled = false;
+  scene.add(rocks);
+}
+
+/* ---------------- Landmarks: cones, poles, windsock, radio tower ---------------- */
+function buildMarkers() {
+  // Orange cones around the pad and along the road.
+  const cones = [];
+  for (let k = 0; k < 8; k++) cones.push([Math.cos(k * Math.PI / 4) * 7.5, Math.sin(k * Math.PI / 4) * 7.5]);
+  for (const z of [-20, -40, -58]) cones.push([-5.2, z], [5.2, z]);
+
+  const coneGeo = new THREE.ConeGeometry(0.28, 0.7, 8); coneGeo.translate(0, 0.35, 0);
+  const coneMesh = new THREE.InstancedMesh(coneGeo, new THREE.MeshLambertMaterial({ color: 0xff7a1a }), cones.length);
+  cones.forEach(([x, z], i) => {
+    dummy.position.set(x, 0, z); dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
+    coneMesh.setMatrixAt(i, dummy.matrix);
+    addCylinderCollider(x, z, 0.28, 0.7);
+  });
+  coneMesh.frustumCulled = false;
+  scene.add(coneMesh);
+
+  // Tall white poles with red tops, handy for flying around.
+  const poles = [[32, -25], [-34, -48], [46, 12]];
+  const poleGeo = new THREE.CylinderGeometry(0.09, 0.09, 8, 6); poleGeo.translate(0, 4, 0);
+  const capGeo  = new THREE.SphereGeometry(0.28, 8, 6);          capGeo.translate(0, 8.1, 0);
+  const poleMesh = new THREE.InstancedMesh(poleGeo, new THREE.MeshLambertMaterial({ color: 0xf0f0f0 }), poles.length);
+  const capMesh  = new THREE.InstancedMesh(capGeo,  new THREE.MeshLambertMaterial({ color: 0xd63a2f }), poles.length);
+  poles.forEach(([x, z], i) => {
+    dummy.position.set(x, 0, z); dummy.updateMatrix();
+    poleMesh.setMatrixAt(i, dummy.matrix); capMesh.setMatrixAt(i, dummy.matrix);
+    addCylinderCollider(x, z, 0.09, 8.3);
+  });
+  for (const m of [poleMesh, capMesh]) { m.frustumCulled = false; scene.add(m); }
+
+  // Windsock beside the pad: it swings with the wind.
+  const sockGroup = new THREE.Group();
+  sockGroup.position.set(10, terrainHeight(10, 6), 6);
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 4, 6), new THREE.MeshLambertMaterial({ color: 0xf0f0f0 }));
+  pole.geometry.translate(0, 2, 0);
+  const pivot = new THREE.Group();
+  pivot.position.y = 3.9;
+  const sockGeo = new THREE.ConeGeometry(0.4, 1.8, 8, 1, true); sockGeo.translate(0, 0.9, 0);
+  const sock = new THREE.Mesh(sockGeo, new THREE.MeshLambertMaterial({ color: 0xff7a1a, side: THREE.DoubleSide }));
+  pivot.add(sock);
+  sockGroup.add(pole, pivot);
+  scene.add(sockGroup);
+  addCylinderCollider(10, 6, 0.08, 4);
+
+  // Red and white radio tower with a blinking light. A real hazard for drones!
+  const tx = 100, tz = 30, baseY = terrainHeight(tx, tz), segH = 10, segs = 6;
+  const red = new THREE.MeshLambertMaterial({ color: 0xd63a2f }), white = new THREE.MeshLambertMaterial({ color: 0xf2f2f2 });
+  for (let i = 0; i < segs; i++) {
+    const seg = new THREE.Mesh(new THREE.CylinderGeometry(1.4 - (i + 1) * 0.13, 1.4 - i * 0.13, segH, 8), i % 2 ? white : red);
+    seg.position.set(tx, baseY + segH * (i + 0.5), tz);
+    scene.add(seg);
+  }
+  const towerLight = new THREE.Mesh(new THREE.SphereGeometry(0.7, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff3030 }));
+  towerLight.position.set(tx, baseY + segH * segs + 0.5, tz);
+  scene.add(towerLight);
+  addCylinderCollider(tx, tz, 1.4, baseY + segH * segs);
+
+  return { pivot, sock, towerLight };
+}
+
+/* ---------------- Clouds: puffy shapes that drift slowly around the sky ---------------- */
+function buildClouds() {
+  const puffsPerCloud = 5;
+  const mesh = new THREE.InstancedMesh(
+    new THREE.IcosahedronGeometry(1, 0),
+    new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x8a8f99 }),
+    WORLD.cloudCount * puffsPerCloud
+  );
+  let n = 0;
+  for (let i = 0; i < WORLD.cloudCount; i++) {
+    const cx = (rand() * 2 - 1) * 600, cz = (rand() * 2 - 1) * 600, cy = 75 + rand() * 55;
+    const size = 7 + rand() * 6;
+    for (let k = 0; k < puffsPerCloud; k++) {
+      const s = size * (0.7 + rand() * 0.6);
+      dummy.position.set(cx + (k - 2) * size * 0.9 + (rand() - 0.5) * 4, cy + (rand() - 0.5) * 3, cz + (rand() - 0.5) * size);
+      dummy.rotation.set(0, rand() * 3, 0);
+      dummy.scale.set(s * 1.5, s * 0.6, s);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(n++, dummy.matrix);
+    }
+  }
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+  return mesh;
+}
+
+/* ---------------- Build everything ---------------- */
+const sky = buildSky();
+buildTerrain();
+buildWater();
+buildGroundDetails();
+
+const city = createCityBuilder();
+buildAirfieldBuildings(city);
+const parkTrees = buildTown(city);
+city.finish();
+
+scatterTrees(parkTrees);
+scatterRocks();
+const landmarks = buildMarkers();
+const clouds = buildClouds();
+
+// Small animations: sky follows the camera, clouds drift, windsock swings, tower light blinks.
+function updateWorld(t, dt) {
+  sky.dome.position.copy(camera.position);
+  sky.disc.position.copy(camera.position).addScaledVector(SUN_DIR, 900);
+  clouds.rotation.y += dt * 0.004;
+  // The windsock points the way the wind is blowing and hangs limp when there is none.
+  const idle = WIND.open < 0.3;
+  const aim = idle ? 0.4 + Math.sin(t * 0.35) * 0.7 : Math.atan2(-Math.cos(WIND.from), -Math.sin(WIND.from));
+  let turn = aim - landmarks.pivot.rotation.y;
+  turn = Math.atan2(Math.sin(turn), Math.cos(turn));                       // the short way round
+  landmarks.pivot.rotation.y += turn * Math.min(1, dt * 3);
+  const droop = idle ? 0.3 : clamp(0.9 - WIND.open * 0.12, 0.05, 0.9);   // stronger wind = flatter sock
+  landmarks.sock.rotation.z = -Math.PI / 2 - droop + Math.sin(t * (4 + WIND.open)) * 0.05;
+  landmarks.towerLight.material.color.setHex(Math.sin(t * 4) > 0 ? 0xff3030 : 0x500f0f);
+  if (noticeUntil && performance.now() > noticeUntil) { noticeEl.classList.remove("show"); noticeUntil = 0; }
+}
+
+
+/* ==========================================================================
+   4. DRONE MODEL - built from simple boxes and cylinders (low-poly)
+   Local axes: the drone's nose points toward -Z, its right side is +X,
+   and up is +Y (this is Three.js's convention).
+   Structure:  droneRoot (position + yaw)  ->  droneTilt (lean)  ->  parts
+   ========================================================================== */
+const droneRoot = new THREE.Group();   // moves and turns (yaw) in the world
+const droneTilt = new THREE.Group();   // leans forward/back and left/right (the model lives inside it)
+droneRoot.add(droneTilt);
+scene.add(droneRoot);
+
+const rotors = [];                      // the spinning rotors of the current model (so we can turn them)
+
+// Builds (or rebuilds) the 3D model for a drone type from simple boxes, cylinders, and spheres.
+function buildDroneModel(c) {
+  for (const child of droneTilt.children.slice()) {          // throw away the old model
+    droneTilt.remove(child);
+    child.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  }
+  rotors.length = 0;
+
+  const L = c.look;
+  const mat = hex => new THREE.MeshLambertMaterial({ color: hex });
+  const matBody = mat(L.bodyColor), matArm = mat(L.armColor), matFront = mat(L.front), matRear = mat(L.rear), matBlade = mat(L.bladeColor);
+
+  const model = new THREE.Group();
+  model.scale.setScalar(L.scale);
+  model.position.y = L.lift * L.scale;                      // raise it if something hangs underneath
+  droneTilt.add(model);
+
+  model.add(new THREE.Mesh(new THREE.BoxGeometry(L.body[0], L.body[1], L.body[2]), matBody));
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.12, 0.14), matFront);      // marks the front
+  nose.position.set(0, -0.02, -(L.body[2] / 2 + 0.05));
+  model.add(nose);
+
+  // Motors sit on a circle around the body: 4 (an X) or 6 (a hexagon). Angle 0 is straight ahead.
+  const angles = L.rotors === 6 ? [30, 90, 150, 210, 270, 330] : [45, 135, 225, 315];
+  const motorGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.1, 8);
+  const bladeGeo = new THREE.BoxGeometry(L.blade, 0.012, 0.06);
+  angles.forEach((deg, i) => {
+    const a = deg * Math.PI / 180;
+    const x = Math.sin(a) * L.ring, z = -Math.cos(a) * L.ring;
+
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(L.ring, 0.05, 0.07), matArm);   // an arm from the body out to the motor
+    arm.position.set(x / 2, 0, z / 2);
+    arm.rotation.y = -Math.atan2(z, x);
+    model.add(arm);
+
+    const motor = new THREE.Mesh(motorGeo, z < -0.01 ? matFront : z > 0.01 ? matRear : matArm);   // front motors one color, rear another
+    motor.position.set(x, 0.07, z);
+    model.add(motor);
+
+    const rotor = new THREE.Group();                         // two crossed blades, spun as a unit
+    rotor.position.set(x, 0.14, z);
+    const bladeA = new THREE.Mesh(bladeGeo, matBlade), bladeB = new THREE.Mesh(bladeGeo, matBlade);
+    bladeB.rotation.y = Math.PI / 2;
+    rotor.add(bladeA, bladeB);
+    rotor.userData.dir = i % 2 ? -1 : 1;                     // neighbors spin in opposite directions
+    model.add(rotor);
+    rotors.push(rotor);
+
+    if (L.extra === "guards") {                              // the Micro has a ring around each rotor
+      const guard = new THREE.Mesh(new THREE.TorusGeometry(L.blade / 2 + 0.03, 0.014, 6, 20), matBlade);
+      guard.rotation.x = Math.PI / 2;
+      guard.position.set(x, 0.14, z);
+      model.add(guard);
+    }
+  });
+
+  if (L.extra === "canopy") {                                // the Racer: a battery on top and a tiny antenna
+    const top = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.1, 0.34), matFront);
+    top.position.set(0, 0.11, 0.05);
+    const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.2, 5), matBlade);
+    ant.position.set(0, 0.24, 0.2);
+    model.add(top, ant);
+  } else if (L.extra === "gimbal") {                         // the Photographer: a camera ball under the nose
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), mat(0x20252b));
+    ball.position.set(0, -0.17, -0.2);
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.08, 8), mat(0x4aa3ff));
+    lens.rotation.x = Math.PI / 2;
+    lens.position.set(0, -0.17, -0.31);
+    model.add(ball, lens);
+  } else if (L.extra === "crate") {                          // the Cargo Hauler: a crate slung underneath
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.32, 0.56), mat(0xb5651d));
+    crate.position.set(0, -0.26, 0);
+    const strap = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.06, 0.12), mat(0x3b3f46));
+    strap.position.set(0, -0.2, 0);
+    model.add(crate, strap);
+  }
+}
+buildDroneModel(craft);
+
+// A soft blob under the drone: the best cheap cue for judging altitude.
+const shadowGeo = new THREE.CircleGeometry(0.6, 16);
+shadowGeo.rotateX(-Math.PI / 2);                      // lie flat, facing up
+const shadow = new THREE.Mesh(
+  shadowGeo,
+  new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false,
+                                polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })
+);
+scene.add(shadow);
+
+
+/* ==========================================================================
+   5. INPUT - keyboard in, four numbers out
+   The rest of the game only reads `input`, a set of four values from -1 to 1:
+     throttle: +1 = up,            -1 = down
+     yaw:      +1 = turn right,    -1 = turn left
+     pitch:    +1 = nose forward,  -1 = backward
+     roll:     +1 = slide right,   -1 = slide left
+   In a later stage, a game controller will fill in these same four numbers.
+   ========================================================================== */
+const keys = {};                                   // which keys are currently held
+const input = { throttle: 0, yaw: 0, pitch: 0, roll: 0 };   // smoothed values
+
+const KEYS_USED = ["KeyW", "KeyA", "KeyS", "KeyD", "KeyR",
+                   "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+
+window.addEventListener("keydown", e => {
+  if (e.target && e.target.tagName === "INPUT") return;      // typing a name: leave the keys alone
+  if (e.ctrlKey || e.metaKey || e.altKey) return;            // leave browser shortcuts (Ctrl+R...) alone
+  if (KEYS_USED.includes(e.code)) {
+    e.preventDefault();                            // stop arrow keys from scrolling the page
+    keys[e.code] = true;
+    if (e.code === "KeyR" && !e.repeat) onRestartKey();
+  }
+});
+window.addEventListener("keyup", e => { keys[e.code] = false; });
+window.addEventListener("blur", () => { for (const k in keys) keys[k] = false; });  // no stuck keys
+container.addEventListener("pointerdown", () => window.focus());   // lets the iframe receive keys
+
+function axis(positiveKey, negativeKey) {          // +1, -1, or 0 from a pair of keys
+  return (keys[positiveKey] ? 1 : 0) - (keys[negativeKey] ? 1 : 0);
+}
+
+// Move `current` toward `target` by at most `maxStep`.
+function approach(current, target, maxStep) {
+  if (current < target) return Math.min(current + maxStep, target);
+  return Math.max(current - maxStep, target);
+}
+
+// Two ways to lay out the keys. Each control is [key for +, key for -].
+//   "arrows" is like the sticks on a drone controller (Mode 2):
+//       left hand,  W A S D:     W / S = throttle (up / down),   A / D = yaw (turn right / left)
+//       right hand, arrow keys:  Up / Down = pitch (forward / back),   Left / Right = roll (slide)
+//   "wasd" is the classic game layout: WASD flies, the arrow keys lift and turn.
+const KEY_LAYOUTS = {
+  arrows: {
+    throttle: ["KeyW", "KeyS"],           yaw:  ["KeyD", "KeyA"],
+    pitch:    ["ArrowUp", "ArrowDown"],   roll: ["ArrowRight", "ArrowLeft"],
+    help: "<b>Arrow keys</b> fly: up / down forward / back, left / right slide<br><b>W / S</b> up / down &nbsp; <b>A / D</b> turn left / right<br>",
+    hint: "the arrow keys fly the drone (up and down for forward and back, left and right to slide sideways). W and S lift up and down, and A and D turn.",
+    label: "arrows fly"
+  },
+  wasd: {
+    throttle: ["ArrowUp", "ArrowDown"],   yaw:  ["ArrowRight", "ArrowLeft"],
+    pitch:    ["KeyW", "KeyS"],           roll: ["KeyD", "KeyA"],
+    help: "<b>W / S</b> fly forward / back &nbsp; <b>A / D</b> slide left / right<br><b>Up / Down</b> arrows up / down &nbsp; <b>Left / Right</b> turn<br>",
+    hint: "W and S fly forward and back, and A and D slide sideways. The up and down arrows lift, and the left and right arrows turn.",
+    label: "WASD flies"
+  }
+};
+let controlScheme = "arrows";            // which layout is in use (chosen on the menu)
+
+function updateInput(dt) {
+  const k = KEY_LAYOUTS[controlScheme];
+  const target = {
+    throttle: axis(k.throttle[0], k.throttle[1]),
+    yaw:      axis(k.yaw[0],      k.yaw[1]),
+    pitch:    axis(k.pitch[0],    k.pitch[1]),
+    roll:     axis(k.roll[0],     k.roll[1])
+  };
+  if (!controlsEnabled()) {                        // menus, countdown, and results: the drone sits still
+    target.throttle = target.yaw = target.pitch = target.roll = 0;
+  }
+  // Keys are on/off, but a real stick is smooth, so ease toward the target.
+  for (const name in input) {
+    const speeding = target[name] !== 0 && Math.sign(target[name]) === Math.sign(input[name] || target[name]);
+    const rate = speeding ? CONFIG.inputRamp : CONFIG.inputReturn;
+    input[name] = approach(input[name], target[name], rate * dt);
+  }
+}
+
+
+/* ==========================================================================
+   6. PHYSICS - position, velocity, drag, and tilt
+   ========================================================================== */
+const drone = {
+  pos:     new THREE.Vector3(),
+  vel:     new THREE.Vector3(),
+  heading: 0,        // yaw angle in radians (0 = facing -Z)
+  tiltPitch: 0,      // current visual lean, radians
+  tiltRoll:  0,
+  prevY:     0,      // height last frame (helps tell "landing on a roof" from "hitting a wall")
+  prevPos:   new THREE.Vector3(),   // full position last frame (used to detect flying through a gate)
+  grounded:  true,   // is the drone touching the ground (or a roof, or the water)?
+  surfaceY:  0       // height of whatever is directly below: ground, water, or a rooftop
+};
+
+function resetDrone() {
+  drone.pos.set(0, groundHeightAt(0, 0) + CONFIG.minAltitude, 0);   // on the landing pad
+  drone.prevY = drone.pos.y;
+  drone.prevPos.copy(drone.pos);
+  drone.vel.set(0, 0, 0);
+  drone.heading = 0;
+  drone.tiltPitch = drone.tiltRoll = 0;
+  snapCamera();
+}
+
+function updatePhysics(dt) {
+  updateWind();
+  drone.prevPos.copy(drone.pos);
+  drone.prevY = drone.pos.y;
+
+  // --- Turning (yaw). Turning right makes the heading angle smaller. ---
+  drone.heading -= input.yaw * craft.yaw * dt;
+
+  // --- Which way is "forward" and "right" on the ground right now? ---
+  // (Rotating the vectors (0,0,-1) and (1,0,0) around the vertical axis by the heading.)
+  const sinH = Math.sin(drone.heading);
+  const cosH = Math.cos(drone.heading);
+  const forwardX = -sinH, forwardZ = -cosH;
+  const rightX   =  cosH, rightZ   = -sinH;
+
+  // --- Horizontal acceleration from the pitch and roll sticks (a = F/m, mass = 1) ---
+  const ax = (forwardX * input.pitch + rightX * input.roll) * craft.accel;
+  const az = (forwardZ * input.pitch + rightZ * input.roll) * craft.accel;
+  drone.vel.x += ax * dt;
+  drone.vel.z += az * dt;
+
+  // --- Drag pulls the drone toward the AIR it is flying in. In calm air that means
+  //     "toward standing still", which is why it coasts to a stop when you let go.
+  //     In wind the air itself is moving, so a drone with the sticks centered gets
+  //     pushed along at the wind's speed. Wind only acts while the drone is in the air. ---
+  const airborne = drone.pos.y > drone.surfaceY + CONFIG.minAltitude + 0.2;
+  const windX = WIND.applies && airborne ? WIND.vx * craft.windFactor : 0;     // heavy drones feel less wind, light ones more
+  const windZ = WIND.applies && airborne ? WIND.vz * craft.windFactor : 0;
+  const dragFactor = Math.exp(-craft.drag * dt);
+  drone.vel.x = windX + (drone.vel.x - windX) * dragFactor;
+  drone.vel.z = windZ + (drone.vel.z - windZ) * dragFactor;
+
+  // --- Speed limit: how fast the drone can fly through the air (so a tailwind helps and a headwind hurts) ---
+  const airX = drone.vel.x - windX, airZ = drone.vel.z - windZ;
+  const airSpeed = Math.hypot(airX, airZ);
+  if (airSpeed > craft.maxSpeed) {
+    const scale = craft.maxSpeed / airSpeed;
+    drone.vel.x = windX + airX * scale;
+    drone.vel.z = windZ + airZ * scale;
+  }
+
+  // --- Vertical: the stick sets a target climb speed, and the real climb speed
+  //     eases toward it. Stick centered -> target 0 -> the drone holds its height. ---
+  const targetClimb = input.throttle * craft.climb;
+  drone.vel.y += (targetClimb - drone.vel.y) * (1 - Math.exp(-craft.climbResponse * dt));
+
+  // --- Move: position changes by velocity x time ---
+  drone.pos.addScaledVector(drone.vel, dt);
+
+  // --- The edge of the flight area: an invisible wall around the world ---
+  const fromCenter = Math.hypot(drone.pos.x, drone.pos.z);
+  if (fromCenter > WORLD.radius) {
+    const nx = drone.pos.x / fromCenter, nz = drone.pos.z / fromCenter;
+    drone.pos.x = nx * WORLD.radius;
+    drone.pos.z = nz * WORLD.radius;
+    const outward = drone.vel.x * nx + drone.vel.z * nz;      // speed heading out of the world
+    if (outward > 0) { drone.vel.x -= outward * nx; drone.vel.z -= outward * nz; }
+    showNotice("You have reached the edge of the flight area");
+  }
+
+  // --- Solid objects: buildings, trees, poles, rocks ---
+  const roofY = resolveWorldCollisions();
+
+  // --- Ground: the drone rests on terrain, the lake, or the top of whatever is below ---
+  drone.surfaceY = Math.max(groundHeightAt(drone.pos.x, drone.pos.z), roofY);
+  const floorY = drone.surfaceY + CONFIG.minAltitude;
+  waterHit = false;
+  const wasGrounded = drone.grounded;
+  drone.grounded = drone.pos.y <= floorY;
+  touchdownSpeed = (drone.grounded && !wasGrounded) ? Math.max(0, -drone.vel.y) : 0;   // measured at the moment of touchdown
+  if (drone.grounded) {
+    // Touching down on the lake (not on a rooftop or the shore) is a crash.
+    if (roofY < WATER_LEVEL && terrainHeight(drone.pos.x, drone.pos.z) < WATER_LEVEL) waterHit = true;
+    drone.pos.y = floorY;
+    if (drone.vel.y < 0) drone.vel.y = 0;
+    const friction = Math.exp(-CONFIG.groundFriction * dt);   // skids to a halt on the ground
+    drone.vel.x *= friction;
+    drone.vel.z *= friction;
+  }
+
+  // --- Ceiling ---
+  if (drone.pos.y > CONFIG.maxAltitude) {
+    drone.pos.y = CONFIG.maxAltitude;
+    if (drone.vel.y > 0) drone.vel.y = 0;
+  }
+
+  // --- Visual tilt: lean toward the stick, smoothly. ---
+  // Nose down (forward) is a NEGATIVE rotation about X; right-side down is a NEGATIVE rotation about Z.
+  const maxTilt = THREE.MathUtils.degToRad(craft.tiltDeg);
+  const tiltBlend = 1 - Math.exp(-craft.tiltResponse * dt);
+  drone.tiltPitch += (-input.pitch * maxTilt - drone.tiltPitch) * tiltBlend;
+  drone.tiltRoll  += (-input.roll  * maxTilt - drone.tiltRoll)  * tiltBlend;
+}
+
+
+/* ==========================================================================
+   7. RENDERING - copy the physics state onto the 3D objects, move the camera
+   ========================================================================== */
+function updateDroneVisuals(dt) {
+  droneRoot.position.copy(drone.pos);
+  droneRoot.rotation.y = drone.heading;
+  droneTilt.rotation.set(drone.tiltPitch, 0, drone.tiltRoll);
+
+  // Spin rotors faster when the drone is working harder.
+  const effort = Math.min(1, Math.abs(input.throttle) + 0.5 * Math.max(Math.abs(input.pitch), Math.abs(input.roll)));
+  const spin = CONFIG.rotorIdleSpeed + CONFIG.rotorExtraSpeed * effort;
+  rotors.forEach(r => { r.rotation.y += r.userData.dir * spin * dt; });
+
+  // Shadow lies on whatever is below (ground, water, or a rooftop), tilted to match a slope.
+  // It shrinks and fades as you climb.
+  const altitude = Math.max(0, drone.pos.y - drone.surfaceY);
+  shadow.position.set(drone.pos.x, drone.surfaceY + 0.03, drone.pos.z);
+  if (drone.surfaceY > groundHeightAt(drone.pos.x, drone.pos.z) + 0.01 || terrainHeight(drone.pos.x, drone.pos.z) < WATER_LEVEL) {
+    shadow.quaternion.identity();                                // rooftop or water: flat
+  } else {
+    terrainNormal(drone.pos.x, drone.pos.z, shadowNormal);
+    shadow.quaternion.setFromUnitVectors(UP, shadowNormal);      // match the slope
+  }
+  const s = (1 + altitude * 0.04) * (craft.radius / REF_RADIUS);     // a bigger drone casts a bigger shadow
+  shadow.scale.set(s, s, s);
+  shadow.material.opacity = Math.max(0.08, 0.38 - altitude * 0.012);
+}
+const UP = new THREE.Vector3(0, 1, 0);
+const shadowNormal = new THREE.Vector3();
+
+// Where the chase camera wants to be: behind and above the drone (ignores tilt).
+const desiredCamPos = new THREE.Vector3();
+const lookTarget    = new THREE.Vector3();
+
+function computeCameraTargets() {
+  const backX = Math.sin(drone.heading);    // "behind" the drone on the ground
+  const backZ = Math.cos(drone.heading);
+  desiredCamPos.set(
+    drone.pos.x + backX * CONFIG.cameraDistance,
+    drone.pos.y + CONFIG.cameraHeight,
+    drone.pos.z + backZ * CONFIG.cameraDistance
+  );
+  desiredCamPos.y = Math.max(desiredCamPos.y, groundHeightAt(desiredCamPos.x, desiredCamPos.z) + 0.5);  // stay above the ground
+  lookTarget.set(drone.pos.x, drone.pos.y + CONFIG.cameraLookHeight, drone.pos.z);
+}
+
+function updateCamera(dt) {
+  computeCameraTargets();
+  // Exponential smoothing: close a fixed fraction of the gap each frame
+  // (adjusted for dt so it feels the same at any frame rate).
+  const blend = 1 - Math.exp(-CONFIG.cameraSmoothing * dt);
+  camera.position.lerp(desiredCamPos, blend);
+  camera.position.y = Math.max(camera.position.y, groundHeightAt(camera.position.x, camera.position.z) + 0.4);
+  camera.lookAt(lookTarget);
+}
+
+function snapCamera() {                     // jump straight to the ideal spot (no smoothing)
+  computeCameraTargets();
+  camera.position.copy(desiredCamPos);
+  camera.lookAt(lookTarget);
+}
+
+// Keep the canvas matched to its container (works in an iframe, too).
+function resize() {
+  const w = container.clientWidth  || window.innerWidth;
+  const h = container.clientHeight || window.innerHeight;
+  renderer.setSize(w, h, false);            // false: CSS already sizes the canvas to 100%
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener("resize", resize);
+if (window.ResizeObserver) new ResizeObserver(resize).observe(container);
+
+
+/* ==========================================================================
+   9. RACING - gates, timing, scoring, the leaderboard, the HUD, and the menus
+   The race is a small state machine:
+        menu -> countdown -> racing -> finished -> (menu or race again)
+   There is also "free" (fly around with no clock). Controls only work while
+   "racing" or "free". Everything the physics needs from the course is just a
+   list of gates plus a few extra solid poles.
+   ========================================================================== */
+const $ = id => document.getElementById(id);
+
+const GAME = {
+  state: "menu",          // "menu" | "countdown" | "racing" | "finished" | "free"
+  paused: false,
+  courseIndex: 0,
+  pilot: "Pilot",
+  time: 0,                // seconds of actual flying
+  penalty: 0,             // seconds added by crashes and bumps
+  crashes: 0,
+  bumps: 0,
+  nextGate: 0,            // index of the gate you must fly through next
+  bonus: 0,               // seconds taken off for accurate passes through rings
+  bullseyes: 0,           // rings flown through the middle
+  inners: 0,              // rings flown through the inner band
+  phase: "gates",         // "gates" (fly the course), then "landing" (get back down on the pad)
+  settle: 0,              // seconds spent sitting still on the pad
+  gatesTime: 0,           // what the clock said when the last gate was cleared
+  countdown: 0,
+  cooldown: 0             // short window after a hit when more hits do not count
+};
+
+function controlsEnabled() { return GAME.state === "racing" || GAME.state === "free"; }
+
+/* ---------------- Wind ----------------
+   The wind is a function of the race clock, so every pilot gets exactly the same gusts
+   at the same moment of the race. It is the sum of three slow waves (a gust pattern that
+   never quite repeats) and a direction that wanders a little. */
+const DEG = Math.PI / 180;
+const WIND = { vx: 0, vz: 0, speed: 0, open: 0, from: 0, applies: false };
+// speed = what the drone feels (reduced among buildings), open = what the windsock sees
+
+function shelterAt(x, y, z) {            // 1 = fully exposed, 0.35 = deep in the town's streets
+  const half = TOWN.cols * TOWN.pitch / 2;
+  const dx = Math.abs(x - TOWN.x), dz = Math.abs(z - TOWN.z);
+  const inside = 1 - Math.max(smoothstep(half - 10, half + 10, dx), smoothstep(half - 10, half + 10, dz));
+  const low = 1 - smoothstep(25, 45, y);                       // above the rooftops there is no shelter
+  return 1 - 0.65 * inside * low;
+}
+
+function updateWind() {
+  const course = COURSES[GAME.courseIndex];
+  const w = course && course.wind;
+  const showing = !!w && (GAME.state === "racing" || GAME.state === "countdown");
+  WIND.applies = !!w && GAME.state === "racing";
+  if (!showing) { WIND.vx = WIND.vz = WIND.speed = WIND.open = 0; return; }
+  const t = GAME.time;
+  const gust = 0.55 * Math.sin(0.9 * t + 0.3) + 0.30 * Math.sin(2.3 * t + 1.7) + 0.15 * Math.sin(4.1 * t + 0.9);   // -1 to +1
+  WIND.from = w.from * DEG + (w.swing || 0) * DEG * Math.sin(0.37 * t + 0.5);
+  WIND.open = Math.max(0, w.speed * (1 + w.gust * gust));
+  WIND.speed = WIND.open * shelterAt(drone.pos.x, drone.pos.y, drone.pos.z);
+  WIND.vx = -Math.sin(WIND.from) * WIND.speed;                 // the wind blows AWAY from where it comes from
+  WIND.vz =  Math.cos(WIND.from) * WIND.speed;
+}
+
+// Turns an obstacle list from the course data into plain poles and wall blocks.
+function expandObstacles(list) {
+  const poles = [], walls = [];
+  let count = 0;
+  for (const o of list || []) {
+    const h = o.h || 12;
+    if (o.kind === "poles") {
+      for (const [x, z] of o.at) { poles.push({ x, z, h }); count++; }
+    } else if (o.kind === "slalom") {
+      for (let i = 0; i < o.count; i++) {
+        const t = (i + 1) / (o.count + 1);
+        poles.push({ x: o.from[0] + (o.to[0] - o.from[0]) * t, z: o.from[1] + (o.to[1] - o.from[1]) * t, h });
+        count++;
+      }
+    } else if (o.kind === "lane") {
+      const dx = o.to[0] - o.from[0], dz = o.to[1] - o.from[1], len = Math.hypot(dx, dz);
+      const ux = dx / len, uz = dz / len;
+      for (const t of o.stations) {
+        for (const side of [-1, 1]) {                          // one pole on each side of the lane
+          poles.push({ x: o.from[0] + dx * t + uz * side * o.width / 2, z: o.from[1] + dz * t - ux * side * o.width / 2, h });
+          count++;
+        }
+      }
+    } else if (o.kind === "barrier") {
+      const half = o.w / 2, d = (o.d || 2) / 2, at = o.gapAt || 0;
+      const pieces = [[-half, at - o.gap / 2], [at + o.gap / 2, half]];   // the wall on each side of the gap
+      for (const [a, b] of pieces) {
+        if (o.axis === "z") walls.push({ x0: o.x - d, x1: o.x + d, z0: o.z + a, z1: o.z + b, h });
+        else                walls.push({ x0: o.x + a, x1: o.x + b, z0: o.z - d, z1: o.z + d, h });
+      }
+      count++;
+    }
+  }
+  return { poles, walls, count };
+}
+
+function buildObstacles(course) {
+  const obs = expandObstacles(course.obstacles);
+  if (obs.poles.length) {
+    const bodyGeo = new THREE.CylinderGeometry(0.4, 0.4, 1, 10); bodyGeo.translate(0, 0.5, 0);
+    const bodies = new THREE.InstancedMesh(bodyGeo, new THREE.MeshLambertMaterial({ color: 0xff7a1a }), obs.poles.length);
+    const caps = new THREE.InstancedMesh(new THREE.SphereGeometry(0.6, 8, 6), new THREE.MeshLambertMaterial({ color: 0xffffff }), obs.poles.length);
+    obs.poles.forEach((p, i) => {
+      const gy = groundHeightAt(p.x, p.z);
+      dummy.rotation.set(0, 0, 0);
+      dummy.position.set(p.x, gy, p.z); dummy.scale.set(1, p.h, 1); dummy.updateMatrix();
+      bodies.setMatrixAt(i, dummy.matrix);
+      dummy.position.set(p.x, gy + p.h, p.z); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
+      caps.setMatrixAt(i, dummy.matrix);
+      courseColliders.push({ kind: "cyl", x: p.x, z: p.z, r: 0.4, top: gy + p.h });
+    });
+    for (const m of [bodies, caps]) { m.frustumCulled = false; courseGroup.add(m); }
+  }
+  const wallMat = new THREE.MeshLambertMaterial({ color: 0xc8503f });
+  for (const w of obs.walls) {
+    const gy = groundHeightAt((w.x0 + w.x1) / 2, (w.z0 + w.z1) / 2);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w.x1 - w.x0, w.h, w.z1 - w.z0), wallMat);
+    mesh.position.set((w.x0 + w.x1) / 2, gy + w.h / 2, (w.z0 + w.z1) / 2);
+    courseGroup.add(mesh);
+    courseColliders.push({ kind: "box", x0: w.x0, x1: w.x1, z0: w.z0, z1: w.z1, top: gy + w.h });
+  }
+}
+
+const ui = {
+  hud: $("hud"), course: $("hudCourse"), pilot: $("hudPilot"), best: $("hudBest"),
+  time: $("hudTime"), gate: $("hudGate"), hits: $("hudHits"), bonus: $("hudBonus"), wind: $("hudWind"), windArrow: $("windArrow"), windText: $("hudWindText"),
+  minimap: $("minimap"), pointer: $("pointer"), arrow: $("pointerArrow"), label: $("pointerLabel"),
+  banner: $("banner"), countdown: $("countdown"), flash: $("flash"), help: $("help"),
+  menu: $("menu"), results: $("results"), pause: $("pauseScreen"),
+  name: $("pilotName"), courseList: $("courseList"), boardTitle: $("boardTitle"), boardList: $("boardList"),
+  storeNote: $("storeNote"), btnSound: $("btnSound"), btnReset: $("btnReset"), btnControls: $("btnControls"),
+  helpKeys: $("helpKeys"), controlHint: $("controlHint"),
+  droneList: $("droneList"), droneBlurb: $("droneBlurb")
+};
+
+function setText(elm, text) {            // only touch the page when the text actually changed
+  if (elm._text !== text) { elm._text = text; elm.textContent = text; }
+}
+
+function fmtTime(sec, decimals) {
+  decimals = decimals === undefined ? 1 : decimals;
+  const scale = Math.pow(10, decimals);
+  const t = Math.round(sec * scale);
+  const m = Math.floor(t / (60 * scale));
+  const s = (t - m * 60 * scale) / scale;
+  return String(m).padStart(2, "0") + ":" + s.toFixed(decimals).padStart(decimals + 3, "0");
+}
+
+/* ---------------- Sound (made with the Web Audio API, so there are no files to load) ---------------- */
+let audioCtx = null;
+let soundOn = true;
+function beep(freq, dur, type, vol) {
+  if (!soundOn) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const now = audioCtx.currentTime, osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+    osc.type = type || "sine";
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(vol || 0.08, now);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(now); osc.stop(now + dur);
+  } catch (e) { /* no sound available: that is fine */ }
+}
+const sfx = {
+  tick:   () => beep(440, 0.12, "sine", 0.07),
+  go:     () => beep(880, 0.35, "sine", 0.09),
+  gate:   () => { beep(660, 0.1, "sine", 0.07); setTimeout(() => beep(990, 0.14, "sine", 0.07), 90); },
+  bullseye: () => [880, 1100, 1320].forEach((f, i) => setTimeout(() => beep(f, 0.13, "triangle", 0.08), i * 70)),
+  bump:   () => beep(180, 0.1, "square", 0.05),
+  crash:  () => { beep(90, 0.4, "sawtooth", 0.1); beep(60, 0.5, "square", 0.06); },
+  splash: () => { beep(260, 0.12, "sawtooth", 0.06); setTimeout(() => beep(150, 0.35, "sine", 0.09), 80); },
+  finish: () => [660, 830, 990, 1320].forEach((f, i) => setTimeout(() => beep(f, 0.22, "triangle", 0.08), i * 110))
+};
+
+/* ---------------- Saved scores (kept in this browser with localStorage) ---------------- */
+const STORE_KEY = "droneObstacleCourse.v2";          // v2: scores are kept per drone and now include the landing
+let store = { scores: {}, name: "", sound: true, drone: "trainer", controls: "arrows" };
+let storeWorks = true;                    // becomes false if the browser blocks saving
+
+function loadStore() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) store = Object.assign(store, JSON.parse(raw));
+  } catch (e) { storeWorks = false; }
+}
+function saveStore() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(store)); }
+  catch (e) { storeWorks = false; }
+}
+
+function boardKey(course) { return course.id + ":" + craft.id; }      // every course has a separate board for each drone
+
+function medalTimes(course) {                                         // slower drones get more time for the same medal
+  const k = craft.medalScale || 1, m = course.medals;
+  return { gold: Math.round(m.gold * k), silver: Math.round(m.silver * k), bronze: Math.round(m.bronze * k) };
+}
+
+function cleanName(raw) {
+  return String(raw || "").replace(/\s+/g, " ").trim().slice(0, 14) || "Pilot";
+}
+
+// Adds a finished run to the board. Returns the rank (0 if it missed the board) and whether it beats the pilot's old best.
+function recordResult(course, result) {
+  const key = boardKey(course);
+  const list = store.scores[key] || (store.scores[key] = []);
+  const same = list.filter(e => e.n.toLowerCase() === result.n.toLowerCase());
+  const oldBest = same.length ? Math.min.apply(null, same.map(e => e.tot)) : Infinity;
+  list.push(result);
+  list.sort((a, b) => a.tot - b.tot || a.c - b.c);
+  const rank = list.indexOf(result) + 1;
+  if (list.length > CONFIG.game.topScores) list.length = CONFIG.game.topScores;
+  saveStore();
+  return { rank: rank <= CONFIG.game.topScores ? rank : 0, personalBest: result.tot < oldBest };
+}
+
+function renderBoard(listEl, courseId, mine) {
+  const list = store.scores[courseId] || [];
+  listEl.textContent = "";
+  const addRow = (rank, e, isMine) => {
+    const li = document.createElement("li");
+    if (isMine) li.className = "me";
+    const parts = [["r", rank + "."], ["n", e.n], ["t", fmtTime(e.tot, 2)], ["c", e.c + (e.c === 1 ? " crash" : " crashes")]];
+    for (const [cls, text] of parts) {
+      const span = document.createElement("span");
+      span.className = cls; span.textContent = text; li.appendChild(span);
+    }
+    listEl.appendChild(li);
+  };
+  if (!list.length) {
+    const li = document.createElement("li");
+    li.className = "empty"; li.textContent = "No times yet. Be the first!";
+    listEl.appendChild(li);
+    return;
+  }
+  list.slice(0, 5).forEach((e, i) => addRow(i + 1, e, e === mine));
+  const mineIndex = mine ? list.indexOf(mine) : -1;
+  if (mineIndex >= 5) addRow(mineIndex + 1, mine, true);          // always show the player's own row
+}
+
+/* ---------------- Building a course: gates, labels, and extra poles ---------------- */
+const courseGroup = new THREE.Group();
+scene.add(courseGroup);
+let gates = [];
+
+const beacon = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.5, 0.5, 90, 8, 1, true),
+  new THREE.MeshBasicMaterial({ color: 0xffd23f, transparent: true, opacity: 0.35, depthWrite: false, fog: false, side: THREE.DoubleSide })
+);
+beacon.visible = false;
+scene.add(beacon);                                       // a tall light that marks the next gate
+
+const GATE_LOOK = {                                      // color and opacity for each gate state
+  future: { color: 0xe8edf2, opacity: 0.55 },
+  next:   { color: 0xffd23f, opacity: 1.0 },
+  done:   { color: 0x4caf70, opacity: 0.3 }
+};
+
+function makeLabel(text) {
+  const c = document.createElement("canvas");
+  c.width = 128; c.height = 64;
+  const g = c.getContext("2d");
+  g.fillStyle = "rgba(14, 22, 32, 0.8)"; g.fillRect(4, 4, 120, 56);
+  g.fillStyle = "#ffffff"; g.font = "bold 40px Arial, sans-serif";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillText(text, 64, 34);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), fog: false, transparent: true }));
+  sprite.scale.set(text.length > 2 ? 6 : 3.2, text.length > 2 ? 3 : 1.6, 1);
+  return sprite;
+}
+
+function clearCourse() {
+  for (const child of courseGroup.children.slice()) {
+    courseGroup.remove(child);
+    child.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+    });
+  }
+  gates = [];
+  courseColliders.length = 0;
+  beacon.visible = false;
+}
+
+function buildCourse(course) {
+  clearCourse();
+  const defs = course.gates;
+  defs.forEach((def, i) => {
+    const prev = i === 0 ? { x: 0, z: 0 } : defs[i - 1];
+    const next = defs[i + 1];
+
+    // Which way should the gate face? Halfway between the way you arrive and the way you leave.
+    let ix = def.x - prev.x, iz = def.z - prev.z;
+    const il = Math.hypot(ix, iz) || 1; ix /= il; iz /= il;
+    let ox = ix, oz = iz;
+    if (next) { ox = next.x - def.x; oz = next.z - def.z; const ol = Math.hypot(ox, oz) || 1; ox /= ol; oz /= ol; }
+    let fx = ix + ox, fz = iz + oz;
+    const fl = Math.hypot(fx, fz);
+    if (fl < 0.2) { fx = ix; fz = iz; } else { fx /= fl; fz /= fl; }
+    const heading = def.heading !== undefined ? def.heading : Math.atan2(-fx, -fz);
+
+    const kind = def.kind || "ring";
+    const ground = groundHeightAt(def.x, def.z);
+    const g = {
+      index: i, kind, r: def.r || 4.5, heading,
+      c: new THREE.Vector3(def.x, ground + (kind === "pylons" ? 6 : def.h), def.z),
+      n: new THREE.Vector3(-Math.sin(heading), 0, -Math.cos(heading)),       // the direction you must fly through it
+      right: new THREE.Vector3(Math.cos(heading), 0, -Math.sin(heading)),
+      isFinish: i === defs.length - 1,
+      state: "future", visuals: [], mat: null
+    };
+    g.mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, fog: false });
+
+    if (kind === "ring") {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(g.r, 0.3, 8, 32), g.mat);
+      ring.position.copy(g.c);
+      ring.rotation.y = heading;                      // the hoop faces the way you should fly
+      courseGroup.add(ring);
+      g.visuals.push(ring);
+      makeTarget(g);
+    } else {
+      for (const side of [-1, 1]) {                   // two solid poles with a gap between them
+        const px = g.c.x + g.right.x * side * (g.r + 0.35), pz = g.c.z + g.right.z * side * (g.r + 0.35);
+        const pg = groundHeightAt(px, pz);
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 12, 10), g.mat);
+        pole.position.set(px, pg + 6, pz);
+        courseGroup.add(pole);
+        g.visuals.push(pole);
+        courseColliders.push({ kind: "cyl", x: px, z: pz, r: 0.35, top: pg + 12 });
+      }
+    }
+
+    const label = makeLabel(g.isFinish ? "LAST" : String(i + 1));
+    label.position.set(g.c.x, g.c.y + (kind === "pylons" ? 8.5 : g.r + 1.8), g.c.z);
+    courseGroup.add(label);
+    gates.push(g);
+  });
+  gates.forEach(g => setGateState(g, "future"));
+  if (gates.length) setGateState(gates[0], "next");
+  buildObstacles(course);
+  placeBeacon();
+}
+
+// How the target (bullseye, inner band, and the lines between the zones) looks in each state: [color, opacity].
+const TARGET_LOOK = {
+  future: { bull: [0xff8a8a, 0.30], band: [0xffffff, 0.10], line: [0xffffff, 0.45] },
+  next:   { bull: [0xff3b3b, 0.80], band: [0xffffff, 0.28], line: [0xffffff, 0.95] },
+  done:   { bull: [0x4caf70, 0.25], band: [0x4caf70, 0.10], line: [0x4caf70, 0.30] }
+};
+
+// A dartboard laid across the inside of a ring: a red bullseye, a pale inner band, and thin lines
+// where the zones change. They are see-through so you can still see where you are going.
+function makeTarget(g) {
+  const R = CONFIG.game;
+  const rb = g.r * R.bullseyeRadius, ri = g.r * R.innerRadius;
+  const group = new THREE.Group();
+  group.position.copy(g.c);
+  group.rotation.y = g.heading;                                    // faces the way you fly through, like the ring
+  const part = (geometry, order) => {
+    const m = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false, fog: false });
+    const mesh = new THREE.Mesh(geometry, m);
+    mesh.position.z = order * 0.01;                                // a hair apart so they do not flicker
+    group.add(mesh);
+    return m;
+  };
+  g.tmat = {
+    band: part(new THREE.RingGeometry(rb, ri, 40), 1),
+    bull: part(new THREE.CircleGeometry(rb, 28), 2),
+    line: part(new THREE.RingGeometry(ri - 0.07, ri + 0.07, 40), 3),
+    line2: part(new THREE.RingGeometry(rb - 0.07, rb + 0.07, 28), 3)
+  };
+  courseGroup.add(group);
+}
+
+function setGateState(g, state) {
+  g.state = state;
+  const look = GATE_LOOK[state];
+  g.mat.color.setHex(state === "future" && g.isFinish ? 0xff9ad5 : look.color);
+  g.mat.opacity = look.opacity;
+  if (g.kind === "ring") g.visuals[0].scale.set(1, 1, 1);
+  if (g.tmat) {
+    const t = TARGET_LOOK[state];
+    for (const [part, key] of [["bull", "bull"], ["band", "band"], ["line", "line"], ["line2", "line"]]) {
+      g.tmat[part].color.setHex(t[key][0]);
+      g.tmat[part].opacity = t[key][1];
+    }
+  }
+}
+
+// While landing, a green light and a glowing ring mark the pad.
+const PAD_TARGET = new THREE.Vector3(PAD.x, groundHeightAt(PAD.x, PAD.z) + 0.6, PAD.z);
+const padRing = new THREE.Mesh(
+  new THREE.RingGeometry(PAD.r - 0.9, PAD.r - 0.4, 48),               // its outer edge is exactly where a landing stops counting
+  new THREE.MeshBasicMaterial({ color: 0x8df0a8, transparent: true, opacity: 0.8, fog: false, side: THREE.DoubleSide,
+                                depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 })
+);
+padRing.rotation.x = -Math.PI / 2;
+padRing.position.set(PAD.x, groundHeightAt(PAD.x, PAD.z) + 0.07, PAD.z);
+padRing.visible = false;
+scene.add(padRing);
+
+function placeBeacon() {
+  const live = GAME.state === "racing" || GAME.state === "countdown";
+  if (GAME.phase === "landing") {
+    beacon.material.color.setHex(0x8df0a8);
+    beacon.position.set(PAD.x, 40, PAD.z);
+    beacon.visible = live;
+    return;
+  }
+  beacon.material.color.setHex(0xffd23f);
+  const g = gates[GAME.nextGate];
+  beacon.visible = !!g && live;
+  if (g) beacon.position.set(g.c.x, g.c.y + (g.kind === "ring" ? g.r : 6) + 0.6 + 45, g.c.z);   // rises from the top of the ring
+}
+
+function courseLength(course) {
+  let total = 0, px = 0, pz = 0;
+  for (const g of course.gates) { total += Math.hypot(g.x - px, g.z - pz); px = g.x; pz = g.z; }
+  return total;
+}
+
+/* ---------------- Detecting a pass through a gate ----------------
+   Each frame we look at the line the drone travelled (last position to this one).
+   If that line crosses the gate's flat "doorway" in the right direction, and the
+   crossing point is inside the hoop (or between the poles), the gate counts. */
+let crossOffset = 0;                       // after a successful pass: how far from the middle of the ring (m)
+const crossPoint = new THREE.Vector3();    // and where in the world it crossed
+
+function crossedGate(g, p0, p1) {
+  const reach = g.r + (REF_RADIUS - craft.radius);                   // a wider drone has less room to spare in a gate
+  const s0 = (p0.x - g.c.x) * g.n.x + (p0.z - g.c.z) * g.n.z;      // which side of the doorway, before
+  const s1 = (p1.x - g.c.x) * g.n.x + (p1.z - g.c.z) * g.n.z;      // and after (positive = past it)
+  if (!(s0 < 0 && s1 >= 0)) return false;                           // must go through, front to back
+  const t = s0 / (s0 - s1);                                         // how far along the line we crossed
+  const qx = p0.x + (p1.x - p0.x) * t - g.c.x;
+  const qy = p0.y + (p1.y - p0.y) * t - g.c.y;
+  const qz = p0.z + (p1.z - p0.z) * t - g.c.z;
+  if (g.kind === "ring") {
+    crossOffset = Math.hypot(qx, qy, qz);
+    crossPoint.set(g.c.x + qx, g.c.y + qy, g.c.z + qz);
+    return crossOffset <= reach;
+  }
+  return Math.abs(qx * g.right.x + qz * g.right.z) <= reach && Math.abs(qy) <= 6.5;
+}
+
+/* ---------------- Starting, finishing, and the rules ---------------- */
+function resetStats() {
+  GAME.phase = "gates";
+  GAME.bonus = GAME.bullseyes = GAME.inners = 0;
+  GAME.settle = GAME.gatesTime = 0;
+  GAME.time = GAME.penalty = 0;
+  GAME.crashes = GAME.bumps = 0;
+  GAME.nextGate = 0;
+  GAME.cooldown = 0;
+}
+
+function showBanner(text, kind, ms) {
+  ui.banner.textContent = text;
+  ui.banner.className = "show" + (kind ? " " + kind : "");
+  clearTimeout(showBanner.timer);
+  showBanner.timer = setTimeout(() => { ui.banner.className = ""; }, ms || 1300);
+}
+
+function respawnAtCheckpoint() {
+  const last = GAME.nextGate - 1;
+  if (last < 0) { resetDrone(); return; }                         // nothing cleared yet: back to the pad
+  const g = gates[last];
+  const tx = GAME.phase === "landing" ? PAD.x : gates[GAME.nextGate].c.x;
+  const tz = GAME.phase === "landing" ? PAD.z : gates[GAME.nextGate].c.z;
+  drone.pos.copy(g.c);                                            // the middle of the last gate cleared
+  drone.vel.set(0, 0, 0);
+  drone.grounded = false;
+  drone.heading = Math.atan2(-(tx - g.c.x), -(tz - g.c.z));       // facing the next gate (or the pad)
+  drone.tiltPitch = drone.tiltRoll = 0;
+  drone.prevY = drone.pos.y;
+  drone.prevPos.copy(drone.pos);
+  snapCamera();
+}
+
+function flashScreen(kind) {                          // a quick red (crash) or blue (water) glow around the edges
+  ui.flash.classList.toggle("water", kind === "water");
+  ui.flash.classList.add("on");
+  setTimeout(() => ui.flash.classList.remove("on"), 60);
+}
+
+// Touching the lake: a crash, with the same penalty and the same restart at the last gate.
+function handleWaterCrash() {
+  const rules = CONFIG.game;
+  GAME.crashes++;
+  GAME.penalty += rules.crashPenalty;
+  GAME.cooldown = 1.2;
+  showBanner("Splash!  +" + rules.crashPenalty + " s", "bad", 1500);
+  flashScreen("water");
+  sfx.splash();
+  respawnAtCheckpoint();
+}
+
+function handleHit(impact) {
+  const rules = CONFIG.game;
+  if (impact >= rules.crashSpeed) {
+    GAME.crashes++;
+    GAME.penalty += rules.crashPenalty;
+    GAME.cooldown = 1.2;
+    showBanner("Crash!  +" + rules.crashPenalty + " s", "bad", 1500);
+    flashScreen("crash");
+    sfx.crash();
+    respawnAtCheckpoint();
+  } else {
+    GAME.bumps++;
+    GAME.penalty += rules.bumpPenalty;
+    GAME.cooldown = 0.8;
+    showBanner("Bump  +" + rules.bumpPenalty + " s", "bad", 900);
+    sfx.bump();
+  }
+}
+
+// The last gate is cleared, but the race is not over until the drone is sitting on the pad.
+function beginLanding(bonus, zone) {
+  GAME.phase = "landing";
+  GAME.gatesTime = GAME.time;
+  GAME.settle = 0;
+  padRing.visible = true;
+  placeBeacon();
+  showBanner((bonus ? bonus + "   " : "") + "Now land on the pad!", zone === "bull" ? "gold" : "good", 2400);
+  if (zone === "bull") sfx.bullseye(); else sfx.gate();
+}
+
+function handleHardLanding() {
+  const rules = CONFIG.game;
+  GAME.crashes++;
+  GAME.penalty += rules.crashPenalty;
+  GAME.cooldown = 1.2;
+  showBanner("Hard landing!  +" + rules.crashPenalty + " s", "bad", 1500);
+  flashScreen("crash");
+  sfx.crash();
+  respawnAtCheckpoint();
+}
+
+// Called every frame during the landing: did the drone touch down gently, on the pad, and stay put?
+function checkLanding(dt) {
+  const rules = CONFIG.game;
+  if (!drone.grounded) { GAME.settle = 0; return; }
+  const onPad = Math.hypot(drone.pos.x - PAD.x, drone.pos.z - PAD.z) <= PAD.r - 0.4 && drone.surfaceY < 0.5;
+  if (touchdownSpeed > 0 && GAME.cooldown <= 0) {
+    if (touchdownSpeed > rules.landingSpeed) { handleHardLanding(); return; }
+    if (!onPad && !waterHit) showBanner("Not on the pad. Lift off and try again.", "bad", 1500);
+  }
+  const still = Math.hypot(drone.vel.x, drone.vel.z) < 0.8;
+  GAME.settle = onPad && still ? GAME.settle + dt : 0;
+  if (GAME.settle >= rules.landingSettle) finishRace();
+}
+
+// Which part of the target did the drone fly through? Rings only: "bull", "inner", or "outer".
+function scoreGate(g) {
+  if (g.kind !== "ring") return null;
+  const R = CONFIG.game;
+  const zone = crossOffset <= g.r * R.bullseyeRadius ? "bull" : crossOffset <= g.r * R.innerRadius ? "inner" : "outer";
+  if (zone === "bull")  { GAME.bullseyes++; GAME.bonus += R.bullseyeBonus; }
+  if (zone === "inner") { GAME.inners++;    GAME.bonus += R.innerBonus; }
+  // Leave a little marker where the drone went through, like a dart in the board.
+  const marker = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8),
+    new THREE.MeshBasicMaterial({ color: zone === "bull" ? 0xffd23f : zone === "inner" ? 0xffffff : 0xaab4be, fog: false }));
+  marker.position.copy(crossPoint);
+  courseGroup.add(marker);
+  return zone;
+}
+
+function bonusText(zone) {
+  const R = CONFIG.game;
+  if (zone === "bull")  return "Bullseye!  \u2212" + R.bullseyeBonus.toFixed(1) + " s";
+  if (zone === "inner") return "Inner ring  \u2212" + R.innerBonus.toFixed(1) + " s";
+  return "";
+}
+
+function passGate() {
+  const g = gates[GAME.nextGate];
+  const zone = scoreGate(g);
+  const bonus = bonusText(zone);
+  setGateState(g, "done");
+  GAME.nextGate++;
+  if (GAME.nextGate >= gates.length) { beginLanding(bonus, zone); return; }
+  setGateState(gates[GAME.nextGate], "next");
+  placeBeacon();
+  showBanner(bonus || "Gate " + GAME.nextGate + " of " + gates.length, zone === "bull" ? "gold" : "good", bonus ? 1100 : 700);
+  if (zone === "bull") sfx.bullseye(); else sfx.gate();
+}
+
+function finishRace() {
+  GAME.state = "finished";
+  const course = COURSES[GAME.courseIndex];
+  const total = Math.max(0, Math.round((GAME.time + GAME.penalty - GAME.bonus) * 100) / 100);   // time + penalties - bonuses
+  const result = { n: GAME.pilot, t: Math.round(GAME.time * 100) / 100, p: GAME.penalty, bo: GAME.bonus, be: GAME.bullseyes,
+                   c: GAME.crashes, b: GAME.bumps, tot: total, d: Date.now() };
+  const outcome = recordResult(course, result);
+  sfx.finish();
+  beacon.visible = false;
+  padRing.visible = false;
+
+  const m = medalTimes(course);
+  const medal = total <= m.gold ? "gold" : total <= m.silver ? "silver" : total <= m.bronze ? "bronze" : "none";
+  const names = { gold: "Gold medal", silver: "Silver medal", bronze: "Bronze medal", none: "Finished" };
+  $("resMedal").className = "medal " + medal;
+  $("resMedal").textContent = names[medal];
+  $("resTitle").textContent = course.name;
+  $("resPilot").textContent = "Pilot: " + GAME.pilot + " (" + craft.name + ")";
+  $("resTotal").textContent = fmtTime(total, 2);
+  const rings = gates.filter(g => g.kind === "ring").length;
+  const R = CONFIG.game;
+  const lines = [
+    ["Flight time  " + fmtTime(GAME.time, 2), ""],
+    ["Landing  " + fmtTime(GAME.time - GAME.gatesTime, 2) + "  (last gate to touchdown)", ""],
+    ["Bullseyes  " + GAME.bullseyes + " of " + rings + " rings  (\u2212" + (GAME.bullseyes * R.bullseyeBonus).toFixed(1) + " s)", "bon"],
+    ["Inner band  " + GAME.inners + "  (\u2212" + (GAME.inners * R.innerBonus).toFixed(1) + " s)", "bon"],
+    ["Crashes  " + GAME.crashes + "  (+" + GAME.crashes * R.crashPenalty + " s)", "pen"],
+    ["Bumps  " + GAME.bumps + "  (+" + GAME.bumps * R.bumpPenalty + " s)", "pen"]
+  ];
+  const bd = $("resBreakdown");
+  bd.textContent = "";
+  lines.forEach(([text, kind]) => {
+    const div = document.createElement("div");
+    if (kind) div.className = kind;
+    div.textContent = text;
+    bd.appendChild(div);
+  });
+  let rankText = outcome.rank ? "Rank " + outcome.rank + " on this course" : "Outside the top " + CONFIG.game.topScores;
+  if (outcome.personalBest) rankText += "  -  new personal best!";
+  $("resRank").textContent = rankText;
+  renderBoard($("resBoard"), boardKey(course), result);
+  setScreen("results");
+  applyStateUi();
+}
+
+function updateGame(dt) {
+  if (GAME.state === "countdown") {
+    const before = Math.ceil(GAME.countdown);
+    GAME.countdown -= dt;
+    if (GAME.countdown <= 0) {
+      GAME.state = "racing";
+      ui.countdown.textContent = "";
+      showBanner("GO!", "good", 800);
+      sfx.go();
+      applyStateUi();
+    } else if (Math.ceil(GAME.countdown) !== before) {
+      ui.countdown.textContent = String(Math.ceil(GAME.countdown));
+      sfx.tick();
+    }
+    return;
+  }
+  if (GAME.state === "free") {                                    // practice: the lake sends you back to the pad
+    if (waterHit) { showBanner("Splash!  Back to the pad", "bad", 1500); flashScreen("water"); sfx.splash(); resetDrone(); }
+    return;
+  }
+  if (GAME.state !== "racing") return;
+
+  GAME.time += dt;
+  if (GAME.cooldown > 0) GAME.cooldown -= dt;
+
+  if (GAME.phase === "gates") {
+    const g = gates[GAME.nextGate];
+    if (g && crossedGate(g, drone.prevPos, drone.pos)) passGate();
+  }
+  if (GAME.state === "racing" && GAME.cooldown <= 0 && worldImpact >= CONFIG.game.bumpSpeed) handleHit(worldImpact);
+  if (GAME.state === "racing" && GAME.cooldown <= 0 && waterHit) handleWaterCrash();
+  if (GAME.state === "racing" && GAME.phase === "landing") checkLanding(dt);
+}
+
+/* ---------------- Screens and state changes ---------------- */
+function setScreen(name) {
+  ui.menu.classList.toggle("hidden", name !== "menu");
+  ui.results.classList.toggle("hidden", name !== "results");
+  ui.pause.classList.toggle("hidden", name !== "pause");
+}
+
+function applyStateUi() {
+  const s = GAME.state;
+  const playing = s === "countdown" || s === "racing";
+  ui.hud.classList.toggle("hidden", !playing);
+  ui.pointer.classList.toggle("hidden", !playing);
+  ui.minimap.classList.toggle("hidden", !(playing || s === "free"));
+  ui.help.classList.toggle("hidden", s === "menu" || s === "finished");
+  if (s !== "countdown") ui.countdown.textContent = "";
+  padRing.visible = s === "racing" && GAME.phase === "landing";
+  placeBeacon();
+}
+
+// Storm weather: heavy haze, a gray sky, and dimmer light. Pass null for a clear day.
+function applyWeather(w) {
+  const fogColor = w ? w.fogColor : CONFIG.horizonColor;
+  scene.fog.color.setHex(fogColor);
+  scene.background.setHex(fogColor);
+  scene.fog.near = w ? w.fog[0] : CONFIG.fogNear;
+  scene.fog.far  = w ? w.fog[1] : CONFIG.fogFar;
+  sky.dome.material.color.setHex(w ? w.tint : 0xffffff);
+  sky.dome.visible = !(w && w.hideSky);                // a foggy day has no blue sky to see
+  sky.disc.visible = !w;
+  hemi.intensity = LIGHT_BASE.hemi * (w ? w.light : 1);
+  sun.intensity  = LIGHT_BASE.sun * (w ? w.light : 1);
+}
+
+function startRace(index) {
+  const course = COURSES[index];
+  GAME.courseIndex = index;
+  GAME.paused = false;
+  GAME.pilot = cleanName(ui.name.value);
+  ui.name.value = GAME.pilot;
+  store.name = GAME.pilot;
+  saveStore();
+  buildCourse(course);
+  applyWeather(course.weather || null);
+  resetStats();
+  resetDrone();
+  GAME.state = "countdown";
+  GAME.countdown = CONFIG.game.countdownSeconds;
+  ui.countdown.textContent = String(Math.ceil(GAME.countdown));
+  sfx.tick();
+  setScreen(null);
+  applyStateUi();
+}
+
+function startFree() {
+  applyWeather(null);
+  clearCourse();
+  resetStats();
+  resetDrone();
+  GAME.paused = false;
+  GAME.state = "free";
+  setScreen(null);
+  applyStateUi();
+}
+
+function goMenu() {
+  applyWeather(null);
+  clearCourse();
+  resetStats();
+  resetDrone();
+  GAME.paused = false;
+  GAME.state = "menu";
+  refreshMenu();
+  setScreen("menu");
+  applyStateUi();
+}
+
+function setPaused(paused) {
+  if (paused && !(GAME.state === "racing" || GAME.state === "countdown" || GAME.state === "free")) return;
+  GAME.paused = paused;
+  setScreen(paused ? "pause" : null);
+}
+
+function onRestartKey() {
+  if (GAME.paused) return;
+  if (GAME.state === "racing" || GAME.state === "countdown") startRace(GAME.courseIndex);
+  else if (GAME.state === "free") resetDrone();
+}
+
+/* ---------------- Menu ---------------- */
+let selectedCourse = 0;
+const courseButtons = [];
+const droneButtons = [];
+
+// Shows the key layout that is in use: on the menu button, the menu hint, and the reminder in the corner.
+function applyControlText() {
+  const k = KEY_LAYOUTS[controlScheme];
+  ui.btnControls.textContent = "Controls: " + k.label;
+  ui.controlHint.textContent = "Controls: " + k.hint + " Enter starts the race. Esc pauses. R restarts.";
+  ui.helpKeys.innerHTML = k.help;
+}
+
+function setCraft(id) {                                // switch drone type: new handling and a new model on the pad
+  craft = DRONES.find(d => d.id === id) || DRONES[0];
+  buildDroneModel(craft);
+}
+
+function statBar(label, rating) {
+  const row = document.createElement("div"); row.className = "stat";
+  const lab = document.createElement("span"); lab.textContent = label;
+  const bar = document.createElement("span"); bar.className = "bar";
+  const fill = document.createElement("i"); fill.style.width = (rating * 20) + "%";
+  bar.appendChild(fill); row.appendChild(lab); row.appendChild(bar);
+  return row;
+}
+
+function refreshMenu() {
+  courseButtons.forEach((b, i) => b.classList.toggle("selected", i === selectedCourse));
+  const course = COURSES[selectedCourse];
+  ui.boardTitle.textContent = "Best times: " + course.name + " with the " + craft.name;
+  droneButtons.forEach((b, i) => b.classList.toggle("selected", DRONES[i] === craft));
+  ui.droneBlurb.textContent = craft.name + ": " + craft.blurb;
+  renderBoard(ui.boardList, boardKey(course), null);
+  ui.storeNote.classList.toggle("hidden", storeWorks);
+  ui.btnSound.textContent = "Sound: " + (soundOn ? "on" : "off");
+  applyControlText();
+}
+
+function buildMenu() {
+  DRONES.forEach(d => {
+    const b = document.createElement("button");
+    b.className = "drone";
+    const name = document.createElement("span"); name.className = "dname";
+    const dot = document.createElement("span"); dot.className = "swatch"; dot.style.background = d.look.swatch;
+    const label = document.createElement("span"); label.textContent = d.name;
+    name.appendChild(dot); name.appendChild(label);
+    b.appendChild(name);
+    b.appendChild(statBar("Speed", d.stats.speed));
+    b.appendChild(statBar("Agility", d.stats.agility));
+    b.appendChild(statBar("Wind", d.stats.wind));
+    const size = document.createElement("div"); size.className = "stat";
+    const sl = document.createElement("span"); sl.textContent = "Size";
+    const sv = document.createElement("span"); sv.className = "txt"; sv.textContent = d.stats.size;
+    size.appendChild(sl); size.appendChild(sv); b.appendChild(size);
+    b.addEventListener("click", () => { setCraft(d.id); store.drone = d.id; saveStore(); refreshMenu(); b.blur(); });
+    ui.droneList.appendChild(b);
+    droneButtons.push(b);
+  });
+
+  COURSES.forEach((course, i) => {
+    const b = document.createElement("button");
+    b.className = "course";
+    const name = document.createElement("span"); name.className = "cname"; name.textContent = course.name;
+    const chip = document.createElement("span"); chip.className = "chip " + course.level.toLowerCase(); chip.textContent = course.level;
+    name.appendChild(chip);
+    const meta = document.createElement("span"); meta.className = "cmeta";
+    const windName = !course.wind ? "No wind" : course.wind.speed <= 3 ? "Light breeze" : course.wind.speed <= 5.5 ? "Moderate wind" : course.wind.speed <= 6.5 ? "Strong wind" : "Storm winds";
+    meta.textContent = course.gates.length + " gates, about " + Math.round(courseLength(course) / 10) * 10 + " m. " + windName + ", " +
+                       expandObstacles(course.obstacles).count + " obstacles" + (course.weather ? ", low visibility" : "") + ". " + course.blurb;
+    b.appendChild(name); b.appendChild(meta);
+    b.addEventListener("click", () => { selectedCourse = i; refreshMenu(); b.blur(); });
+    ui.courseList.appendChild(b);
+    courseButtons.push(b);
+  });
+
+  $("btnStart").addEventListener("click", () => { soundUnlock(); startRace(selectedCourse); });
+  $("btnFree").addEventListener("click", () => { soundUnlock(); startFree(); });
+  ui.btnControls.addEventListener("click", () => {
+    controlScheme = controlScheme === "arrows" ? "wasd" : "arrows";
+    store.controls = controlScheme; saveStore(); refreshMenu(); ui.btnControls.blur();
+  });
+  ui.btnSound.addEventListener("click", () => {
+    soundOn = !soundOn; store.sound = soundOn; saveStore(); refreshMenu(); ui.btnSound.blur();
+    if (soundOn) sfx.tick();
+  });
+  let armed = false;                                  // "Reset scores" needs two clicks, so it cannot happen by accident
+  ui.btnReset.addEventListener("click", () => {
+    if (!armed) { armed = true; ui.btnReset.textContent = "Click again to erase all scores"; return; }
+    armed = false; store.scores = {}; saveStore(); ui.btnReset.textContent = "Reset scores"; refreshMenu();
+  });
+  ui.btnReset.addEventListener("blur", () => { armed = false; ui.btnReset.textContent = "Reset scores"; });
+
+  $("btnAgain").addEventListener("click", () => startRace(GAME.courseIndex));
+  $("btnNext").addEventListener("click", () => { selectedCourse = (GAME.courseIndex + 1) % COURSES.length; startRace(selectedCourse); });
+  $("btnMenu").addEventListener("click", () => { selectedCourse = GAME.courseIndex; goMenu(); });
+  $("btnResume").addEventListener("click", () => setPaused(false));
+  $("btnRestart").addEventListener("click", () => startRace(GAME.courseIndex));
+  $("btnQuit").addEventListener("click", () => { goMenu(); });
+
+  window.addEventListener("keydown", e => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.code === "Enter" && GAME.state === "menu" && !e.repeat) {
+      if (e.target && e.target.tagName === "BUTTON") return;           // let a focused button do its own thing
+      e.preventDefault(); soundUnlock(); startRace(selectedCourse);
+    }
+    if (e.target && e.target.tagName === "INPUT") return;
+    if ((e.code === "Escape" || e.code === "KeyP") && !e.repeat) {
+      if (GAME.state === "free" && !GAME.paused) goMenu();
+      else setPaused(!GAME.paused);
+    }
+  });
+}
+
+function soundUnlock() {                              // browsers only allow sound after a click or key press
+  try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.resume) audioCtx.resume(); }
+  catch (e) { /* ignore */ }
+}
+
+/* ---------------- Heads-up display: timer, arrow to the next gate, minimap ---------------- */
+const MAP = { half: 290, mPerPx: 2, canvas: null, ready: false };
+const mapCtx = ui.minimap.getContext("2d");
+
+// Paints a top-down picture of the whole world once, so drawing the minimap each frame is cheap.
+function buildMinimapCache() {
+  const n = Math.round(MAP.half * 2 / MAP.mPerPx);
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = n;
+  const cx = cv.getContext("2d");
+  const img = cx.createImageData(n, n);
+  const c = new THREE.Color();
+  for (let py = 0; py < n; py++) {
+    for (let px = 0; px < n; px++) {
+      const x = (px + 0.5) * MAP.mPerPx - MAP.half, z = (py + 0.5) * MAP.mPerPx - MAP.half;
+      const h = terrainHeight(x, z);
+      let r, g, b;
+      if (h < WATER_LEVEL) { r = 47; g = 120; b = 184; }
+      else { terrainColor(x, z, h, c); r = c.r * 235; g = c.g * 235; b = c.b * 235; }
+      const k = (py * n + px) * 4;
+      img.data[k] = r; img.data[k + 1] = g; img.data[k + 2] = b; img.data[k + 3] = 255;
+    }
+  }
+  cx.putImageData(img, 0, 0);
+  const P = v => (v + MAP.half) / MAP.mPerPx, L = v => v / MAP.mPerPx;
+  cx.fillStyle = "#56606a";                                                      // town pavement
+  cx.fillRect(P(TOWN.x - TOWN.cols * TOWN.pitch / 2), P(TOWN.z - TOWN.rows * TOWN.pitch / 2), L(TOWN.cols * TOWN.pitch), L(TOWN.rows * TOWN.pitch));
+  cx.fillStyle = "#3f444a";                                                      // road
+  cx.fillRect(P(-ROAD.halfWidth), P(ROAD.toZ), L(ROAD.halfWidth * 2), L(ROAD.fromZ - ROAD.toZ));
+  cx.fillStyle = "#1e2328";                                                      // buildings
+  for (const b of colliders) if (b.kind === "box") cx.fillRect(P(b.x0), P(b.z0), L(b.x1 - b.x0), L(b.z1 - b.z0));
+  cx.fillStyle = "#ffd23f";                                                      // landing pad
+  cx.beginPath(); cx.arc(P(0), P(0), L(4), 0, Math.PI * 2); cx.fill();
+  MAP.canvas = cv;
+  MAP.ready = true;
+}
+
+function drawMinimap() {
+  const S = 170, span = CONFIG.game.minimapSpan, k = S / span, mid = S / 2;
+  mapCtx.clearRect(0, 0, S, S);
+  mapCtx.save();
+  mapCtx.beginPath(); mapCtx.arc(mid, mid, mid, 0, Math.PI * 2); mapCtx.clip();
+  mapCtx.fillStyle = "#1f2a33"; mapCtx.fillRect(0, 0, S, S);
+
+  // Turn the whole map so that the way the drone is facing is always "up".
+  mapCtx.translate(mid, mid); mapCtx.rotate(drone.heading); mapCtx.translate(-mid, -mid);
+  if (MAP.ready) {
+    const cxp = (drone.pos.x + MAP.half) / MAP.mPerPx, czp = (drone.pos.z + MAP.half) / MAP.mPerPx, size = span / MAP.mPerPx;
+    mapCtx.drawImage(MAP.canvas, cxp - size / 2, czp - size / 2, size, size, 0, 0, S, S);
+  }
+  const racing = GAME.state === "racing" || GAME.state === "countdown";
+  if (racing && gates.length) {
+    const nextG = gates[GAME.nextGate];
+    if (nextG) {                                                                // a line to the next gate
+      mapCtx.strokeStyle = "rgba(255, 210, 63, 0.8)"; mapCtx.lineWidth = 2;
+      mapCtx.beginPath(); mapCtx.moveTo(mid, mid);
+      mapCtx.lineTo((nextG.c.x - drone.pos.x) * k + mid, (nextG.c.z - drone.pos.z) * k + mid); mapCtx.stroke();
+    }
+    for (const g of gates) {
+      const mx = (g.c.x - drone.pos.x) * k + mid, my = (g.c.z - drone.pos.z) * k + mid;
+      mapCtx.fillStyle = g.state === "next" ? "#ffd23f" : g.state === "done" ? "#4caf70" : g.isFinish ? "#ff9ad5" : "#ffffff";
+      mapCtx.beginPath(); mapCtx.arc(mx, my, g.state === "next" ? 5 : 3.2, 0, Math.PI * 2); mapCtx.fill();
+    }
+    if (GAME.phase === "landing") {                                             // the pad becomes the target
+      const px = (PAD.x - drone.pos.x) * k + mid, py = (PAD.z - drone.pos.z) * k + mid;
+      mapCtx.strokeStyle = "rgba(141, 240, 168, 0.9)"; mapCtx.lineWidth = 2;
+      mapCtx.beginPath(); mapCtx.moveTo(mid, mid); mapCtx.lineTo(px, py); mapCtx.stroke();
+      mapCtx.fillStyle = "#8df0a8";
+      mapCtx.beginPath(); mapCtx.arc(px, py, 6, 0, Math.PI * 2); mapCtx.fill();
+    }
+  }
+  mapCtx.restore();
+
+  mapCtx.fillStyle = "#ffffff"; mapCtx.strokeStyle = "#10202e"; mapCtx.lineWidth = 1.5;   // the drone, always pointing up
+  mapCtx.beginPath(); mapCtx.moveTo(mid, mid - 8); mapCtx.lineTo(mid + 6, mid + 7); mapCtx.lineTo(mid, mid + 3); mapCtx.lineTo(mid - 6, mid + 7);
+  mapCtx.closePath(); mapCtx.fill(); mapCtx.stroke();
+}
+
+const _proj = new THREE.Vector3();
+const _aim = new THREE.Vector3();
+function updatePointer() {
+  const landing = GAME.phase === "landing";
+  const g = gates[GAME.nextGate];
+  if (!landing && !g) return;
+  const target = landing ? PAD_TARGET : g.c;                       // the next gate, or the pad
+  const W = container.clientWidth || 800, H = container.clientHeight || 600;
+  camera.updateMatrixWorld();
+  _aim.copy(target);
+  if (!landing && g.kind === "ring") _aim.y += g.r + 1.6;          // point at the top of the ring so the arrow never covers the target
+  _proj.copy(_aim).project(camera);
+  let x = _proj.x, y = _proj.y;
+  const behind = _proj.z > 1;
+  if (behind) { x = -x; y = -y; }                                  // behind us: point the arrow to the side it is on
+  const onScreen = !behind && Math.abs(x) < 0.88 && Math.abs(y) < 0.8;
+  let angle;
+  if (onScreen) {
+    angle = 90;                                                    // a down arrow just above the gate
+    y += 0.12;
+  } else {
+    const kScale = Math.max(Math.abs(x) / 0.88, Math.abs(y) / 0.8) || 1;
+    x /= kScale; y /= kScale;
+    angle = Math.atan2(-y, x) * 180 / Math.PI;                     // arrow points toward the gate
+  }
+  ui.pointer.style.transform = "translate(" + ((x * 0.5 + 0.5) * W).toFixed(1) + "px, " + ((0.5 - y * 0.5) * H).toFixed(1) + "px)";
+  ui.arrow.style.transform = "rotate(" + angle.toFixed(1) + "deg)";
+  setText(ui.label, (landing ? "PAD  " : "") + Math.round(drone.pos.distanceTo(target)) + " m");
+}
+
+function updateHud(dt) {
+  const t = clock.elapsedTime;
+  const playing = GAME.state === "countdown" || GAME.state === "racing";
+
+  if (playing) {
+    const course = COURSES[GAME.courseIndex];
+    const board = store.scores[boardKey(course)] || [];
+    setText(ui.course, course.name);
+    setText(ui.pilot, "Pilot: " + GAME.pilot + "  (" + craft.name + ")");
+    setText(ui.best, board.length ? "Best: " + fmtTime(board[0].tot, 1) + "  " + board[0].n : "No best time yet");
+    setText(ui.time, fmtTime(Math.max(0, GAME.time + GAME.penalty - GAME.bonus), 1));       // what your score would be right now
+    setText(ui.gate, GAME.phase === "landing" ? "Land on the pad" : "Gate " + Math.min(GAME.nextGate + 1, gates.length) + " of " + gates.length);
+    const penalties = GAME.crashes || GAME.bumps
+      ? "Crashes " + GAME.crashes + "   Bumps " + GAME.bumps + "   +" + GAME.penalty + " s" : "";
+    setText(ui.hits, penalties);
+    setText(ui.bonus, GAME.bullseyes || GAME.inners
+      ? "Bullseyes " + GAME.bullseyes + "   Inner " + GAME.inners + "   \u2212" + GAME.bonus.toFixed(1) + " s" : "");
+    ui.wind.classList.toggle("hidden", !course.wind);
+    if (course.wind) {
+      setText(ui.windText, WIND.speed > 0.05 ? "Wind " + WIND.speed.toFixed(1) + " m/s" : "Wind calm");
+      const sinH = Math.sin(drone.heading), cosH = Math.cos(drone.heading);       // which way is the wind blowing, as seen from the drone?
+      const ahead = -sinH * WIND.vx - cosH * WIND.vz, toRight = cosH * WIND.vx - sinH * WIND.vz;
+      ui.windArrow.style.transform = "rotate(" + (Math.atan2(toRight, ahead) / DEG).toFixed(0) + "deg)";
+    }
+    updatePointer();
+
+    if (padRing.visible) padRing.material.opacity = 0.55 + 0.35 * Math.sin(t * 6);   // the pad ring pulses too
+    const g = gates[GAME.nextGate];                                // the next gate pulses gently
+    if (g && g.kind === "ring") { const p = 1 + 0.05 * Math.sin(t * 6); g.visuals[0].scale.set(p, p, p); }
+  }
+  if (!ui.minimap.classList.contains("hidden")) drawMinimap();
+}
+
+/* ---------------- Start-up ---------------- */
+function initRacing() {
+  loadStore();
+  setCraft(store.drone || "trainer");
+  controlScheme = store.controls === "wasd" ? "wasd" : "arrows";
+  soundOn = store.sound !== false;
+  ui.name.value = store.name || "";
+  buildMenu();
+  refreshMenu();
+  setScreen("menu");
+  applyStateUi();
+  setTimeout(buildMinimapCache, 60);               // paint the minimap picture shortly after the first frame
+}
+
+
+/* ==========================================================================
+   8. MAIN LOOP - runs once per frame: input -> physics -> drawing
+   ========================================================================== */
+const clock = new THREE.Clock();
+
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), 0.05);   // cap the step so a lag spike cannot launch the drone
+
+  if (!GAME.paused) {
+    updateInput(dt);
+    updatePhysics(dt);
+    updateGame(dt);
+  }
+  updateDroneVisuals(GAME.paused ? 0 : dt);
+  updateCamera(dt);
+  updateWorld(clock.elapsedTime, dt);
+  updateHud(dt);
+
+  renderer.render(scene, camera);
+}
+
+resize();
+resetDrone();
+initRacing();
+frame();
+</script>
+</body>
+</html>
